@@ -256,9 +256,19 @@ export function edgePath(edge: GraphEdge, rowHeight: number): string {
   if (px === cx) {
     return `M ${cx} ${cy} L ${px} ${py}`;
   }
-  // Bend out of the child node into the parent's lane within the first row,
-  // then a straight vertical track down to the parent.
   const bend = Math.min(rowHeight, py - cy);
+  if (px < cx) {
+    // Branch tail merging back down to a lower lane (typically the trunk):
+    // keep the line in the branch's own lane going straight down, and only
+    // bend into the parent's lane in the last row, right at the parent node.
+    // Bending immediately (as the merge-in case does) would run the branch's
+    // colour straight down the parent's lane and paint over the trunk line.
+    const ty = py - bend;
+    return `M ${cx} ${cy} L ${cx} ${ty} C ${cx} ${ty + bend * 0.5}, ${px} ${py - bend * 0.5}, ${px} ${py}`;
+  }
+  // Merge-in: the parent is on a higher lane (the merged-in branch). Bend out
+  // of the child node into that lane within the first row, then run a straight
+  // vertical track down the branch's own lane to the parent.
   const by = cy + bend;
   return `M ${cx} ${cy} C ${cx} ${cy + bend * 0.5}, ${px} ${by - bend * 0.5}, ${px} ${by} L ${px} ${py}`;
 }

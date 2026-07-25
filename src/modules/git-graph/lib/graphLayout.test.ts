@@ -213,6 +213,25 @@ describe("edgePath", () => {
     expect(path.startsWith("M 20 20 C")).toBe(true);
     expect(path).toContain("L 34 92");
   });
+
+  it("keeps a branch tail in its own lane and bends into the trunk only at the parent", () => {
+    // Child on lane 1 (px < cx) merging back down to the trunk two rows below.
+    const edge: GraphEdge = {
+      cx: 34,
+      cy: 20,
+      px: 20,
+      py: 92,
+      lane: 1,
+      childIndex: 0,
+      parentIndex: 2,
+      colorIndex: 1,
+    };
+    const path = edgePath(edge, 36);
+    // Goes straight down the child's own lane first (no immediate bend that
+    // would overlay the trunk), then curves into the parent's lane at the end.
+    expect(path.startsWith("M 34 20 L 34 56")).toBe(true);
+    expect(path.trimEnd().endsWith("20 92")).toBe(true);
+  });
 });
 
 describe("firstParentRowIndex", () => {
