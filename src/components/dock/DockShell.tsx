@@ -12,6 +12,7 @@ import {
 import { TabsArea } from "@/components/TabsArea";
 import { BackgroundImageLayer } from "@/components/BackgroundImageLayer";
 import { Resizer } from "@/components/Resizer";
+import { backgroundSurfaceStyle } from "@/lib/backgroundAppearance";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUiStore, type DockSide, type PanelId } from "@/stores/uiStore";
 import { PANEL_REGISTRY } from "./panelRegistry";
@@ -39,6 +40,8 @@ export function DockShell() {
   const backgroundImagePath = useSettingsStore((s) => s.backgroundImagePath);
   const backgroundImageOpacity = useSettingsStore((s) => s.backgroundImageOpacity);
   const backgroundImageScope = useSettingsStore((s) => s.backgroundImageScope);
+  const backgroundImageTextColor = useSettingsStore((s) => s.backgroundImageTextColor);
+  const themeId = useSettingsStore((s) => s.themeId);
   const workspaceBackgroundActive =
     Boolean(backgroundImagePath) &&
     backgroundImageOpacity > 0 &&
@@ -117,6 +120,15 @@ export function DockShell() {
         )}
 
         <main
+          style={
+            workspaceBackgroundActive
+              ? backgroundSurfaceStyle(
+                  themeId,
+                  backgroundImageOpacity,
+                  backgroundImageTextColor,
+                )
+              : undefined
+          }
           className={`relative isolate min-w-0 flex-1 overflow-hidden ${
             workspaceBackgroundActive ? "wallpaper-surface" : ""
           }`}

@@ -26,6 +26,7 @@ import { findPaneContent, leafIds } from "@/modules/terminal/lib/terminalLayout"
 import { focusedTerminalOps } from "@/modules/terminal/lib/terminalBus";
 import { getPreviewControls, type PreviewControls } from "@/modules/preview/lib/previewControls";
 import { menuCopy, menuPaste, menuSelectAll } from "@/lib/editActions";
+import { backgroundSurfaceStyle } from "@/lib/backgroundAppearance";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { BackgroundImageLayer } from "@/components/BackgroundImageLayer";
 import { FileFinder } from "@/modules/explorer/FileFinder";
@@ -157,6 +158,7 @@ function App() {
   const backgroundImagePath = useSettingsStore((s) => s.backgroundImagePath);
   const backgroundImageOpacity = useSettingsStore((s) => s.backgroundImageOpacity);
   const backgroundImageScope = useSettingsStore((s) => s.backgroundImageScope);
+  const backgroundImageTextColor = useSettingsStore((s) => s.backgroundImageTextColor);
   const windowBackgroundActive =
     Boolean(backgroundImagePath) &&
     backgroundImageOpacity > 0 &&
@@ -705,6 +707,15 @@ function App() {
   return (
     <div
       data-background-image-scope={backgroundImagePath ? backgroundImageScope : "none"}
+      style={
+        windowBackgroundActive
+          ? backgroundSurfaceStyle(
+              themeId,
+              backgroundImageOpacity,
+              backgroundImageTextColor,
+            )
+          : undefined
+      }
       className={`relative isolate flex h-screen w-screen flex-col overflow-hidden bg-bg text-fg ${
         windowBackgroundActive ? "wallpaper-surface" : ""
       }`}

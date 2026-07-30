@@ -12,7 +12,7 @@ describe("BackgroundImageLayer", () => {
     });
   });
 
-  it("renders only in the configured scope with percentage opacity", () => {
+  it("renders an opaque source only in the configured scope", () => {
     useSettingsStore.setState({
       backgroundImagePath: "/app-data/appearance/background.png",
       backgroundImageOpacity: 37,
@@ -28,7 +28,7 @@ describe("BackgroundImageLayer", () => {
 
     const image = screen.getByTestId("background-image-workspace");
     expect(image).toHaveAttribute("src", "/app-data/appearance/background.png");
-    expect(image).toHaveStyle({ opacity: "0.37" });
+    expect(image).not.toHaveAttribute("style");
     expect(screen.queryByTestId("background-image-window")).toBeNull();
   });
 

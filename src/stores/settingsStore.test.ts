@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_BACKGROUND_IMAGE_OPACITY,
+  DEFAULT_TERMINAL_BACKGROUND_IMAGE_OPACITY,
   DEFAULT_TERMINAL_PADDING,
   MAX_BACKGROUND_IMAGE_OPACITY,
   MAX_TERMINAL_PADDING,
@@ -20,7 +21,9 @@ describe("settingsStore", () => {
       themeId: initialState.themeId,
       backgroundImagePath: null,
       backgroundImageOpacity: DEFAULT_BACKGROUND_IMAGE_OPACITY,
+      terminalBackgroundImageOpacity: DEFAULT_TERMINAL_BACKGROUND_IMAGE_OPACITY,
       backgroundImageScope: "workspace",
+      backgroundImageTextColor: null,
       terminalPadding: initialState.terminalPadding,
       wordWrap: initialState.wordWrap,
       workspaceCard: { status: true, branch: true, cwd: true, pr: true },
@@ -69,6 +72,19 @@ describe("settingsStore", () => {
     );
   });
 
+  it("stores a separately clamped terminal background image opacity", () => {
+    expect(useSettingsStore.getState().terminalBackgroundImageOpacity).toBe(
+      DEFAULT_TERMINAL_BACKGROUND_IMAGE_OPACITY,
+    );
+    useSettingsStore.getState().setTerminalBackgroundImageOpacity(62.8);
+    expect(useSettingsStore.getState().terminalBackgroundImageOpacity).toBe(63);
+    expect(localStorage.getItem("tempoterm-settings")).toContain(
+      '"terminalBackgroundImageOpacity":63',
+    );
+    useSettingsStore.getState().setTerminalBackgroundImageOpacity(-10);
+    expect(useSettingsStore.getState().terminalBackgroundImageOpacity).toBe(0);
+  });
+
   it("switches and persists the background image scope", () => {
     expect(useSettingsStore.getState().backgroundImageScope).toBe("workspace");
     useSettingsStore.getState().setBackgroundImageScope("window");
@@ -76,6 +92,15 @@ describe("settingsStore", () => {
     expect(localStorage.getItem("tempoterm-settings")).toContain(
       '"backgroundImageScope":"window"',
     );
+  });
+
+  it("stores only a safe six-digit background text colour", () => {
+    useSettingsStore.getState().setBackgroundImageTextColor("#F4F7FF");
+    expect(useSettingsStore.getState().backgroundImageTextColor).toBe("#f4f7ff");
+    expect(localStorage.getItem("tempoterm-settings")).toContain("#f4f7ff");
+
+    useSettingsStore.getState().setBackgroundImageTextColor("var(--danger)");
+    expect(useSettingsStore.getState().backgroundImageTextColor).toBeNull();
   });
 
   it("defaults the terminal padding and clamps out-of-range values", () => {

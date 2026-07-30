@@ -23,7 +23,6 @@ export function BackgroundImageLayer({ scope }: { scope: BackgroundImageScope })
       draggable={false}
       data-testid={`background-image-${scope}`}
       className="pointer-events-none absolute inset-0 -z-10 h-full w-full select-none object-cover object-center"
-      style={{ opacity: opacity / 100 }}
     />
   );
 }

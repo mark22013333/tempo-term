@@ -15,6 +15,7 @@ export const DEFAULT_UI_ZOOM = 1;
 export const MIN_BACKGROUND_IMAGE_OPACITY = 0;
 export const MAX_BACKGROUND_IMAGE_OPACITY = 100;
 export const DEFAULT_BACKGROUND_IMAGE_OPACITY = 20;
+export const DEFAULT_TERMINAL_BACKGROUND_IMAGE_OPACITY = 35;
 
 export type BackgroundImageScope = "workspace" | "window";
 
@@ -43,8 +44,12 @@ interface SettingsState {
   backgroundImagePath: string | null;
   /** Background image visibility as an integer percentage. */
   backgroundImageOpacity: number;
+  /** Background image visibility specifically beneath terminal panes. */
+  terminalBackgroundImageOpacity: number;
   /** Whether the image stays in the central workspace or spans the window. */
   backgroundImageScope: BackgroundImageScope;
+  /** Optional high-contrast foreground used only while a background image is visible. */
+  backgroundImageTextColor: string | null;
   /** Inner padding (px) between the terminal content and its pane edges. */
   terminalPadding: number;
   wordWrap: boolean;
@@ -112,7 +117,9 @@ interface SettingsState {
   setBackgroundImage: (path: string) => void;
   clearBackgroundImage: () => void;
   setBackgroundImageOpacity: (opacity: number) => void;
+  setTerminalBackgroundImageOpacity: (opacity: number) => void;
   setBackgroundImageScope: (scope: BackgroundImageScope) => void;
+  setBackgroundImageTextColor: (color: string | null) => void;
   setTerminalPadding: (padding: number) => void;
   toggleWordWrap: () => void;
   setRestoreTerminalHistory: (value: boolean) => void;
@@ -165,6 +172,13 @@ function clampBackgroundImageOpacity(value: number): number {
   );
 }
 
+function normalizeBackgroundImageTextColor(value: string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  return /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : null;
+}
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
@@ -172,7 +186,9 @@ export const useSettingsStore = create<SettingsState>()(
       themeId: DEFAULT_THEME_ID,
       backgroundImagePath: null,
       backgroundImageOpacity: DEFAULT_BACKGROUND_IMAGE_OPACITY,
+      terminalBackgroundImageOpacity: DEFAULT_TERMINAL_BACKGROUND_IMAGE_OPACITY,
       backgroundImageScope: "workspace",
+      backgroundImageTextColor: null,
       terminalPadding: DEFAULT_TERMINAL_PADDING,
       wordWrap: false,
       restoreTerminalHistory: true,
@@ -206,7 +222,16 @@ export const useSettingsStore = create<SettingsState>()(
       clearBackgroundImage: () => set({ backgroundImagePath: null }),
       setBackgroundImageOpacity: (opacity) =>
         set({ backgroundImageOpacity: clampBackgroundImageOpacity(opacity) }),
+      setTerminalBackgroundImageOpacity: (opacity) =>
+        set({
+          terminalBackgroundImageOpacity: clampBackgroundImageOpacity(opacity),
+        }),
       setBackgroundImageScope: (backgroundImageScope) => set({ backgroundImageScope }),
+      setBackgroundImageTextColor: (backgroundImageTextColor) =>
+        set({
+          backgroundImageTextColor:
+            normalizeBackgroundImageTextColor(backgroundImageTextColor),
+        }),
       setTerminalPadding: (padding) => set({ terminalPadding: clampPadding(padding) }),
       toggleWordWrap: () => set((s) => ({ wordWrap: !s.wordWrap })),
       setRestoreTerminalHistory: (value) => set({ restoreTerminalHistory: value }),

@@ -96,6 +96,7 @@ import { resumeFlagsFor } from "@/modules/sessions/lib/resumeCommand";
 import type { AiSessionBinding } from "./lib/terminalLayout";
 
 import { IS_MAC, IS_WINDOWS, openModifierLabel } from "@/lib/platform";
+import { nativePointInElement } from "@/lib/nativeDragCoordinates";
 import { selectTerminalFontFamily, useFontStore } from "@/stores/fontStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
@@ -215,7 +216,14 @@ export function TerminalView({
   const themeId = useSettingsStore((s) => s.themeId);
   const backgroundImagePath = useSettingsStore((s) => s.backgroundImagePath);
   const backgroundImageOpacity = useSettingsStore((s) => s.backgroundImageOpacity);
-  const backgroundImageActive = Boolean(backgroundImagePath) && backgroundImageOpacity > 0;
+  const terminalBackgroundImageOpacity = useSettingsStore(
+    (s) => s.terminalBackgroundImageOpacity,
+  );
+  const backgroundImageTextColor = useSettingsStore((s) => s.backgroundImageTextColor);
+  const effectiveBackgroundImageOpacity =
+    backgroundImagePath && backgroundImageOpacity > 0
+      ? terminalBackgroundImageOpacity
+      : 0;
   const terminalPadding = useSettingsStore((s) => s.terminalPadding);
   const [connecting, setConnecting] = useState(true);
   // For SSH panes restored after an app relaunch: the freshSshLeaves set is empty,
@@ -334,9 +342,12 @@ export function TerminalView({
       fontFamily: selectTerminalFontFamily(initial),
       fontSize: initial.fontSize,
       theme: terminalThemeWithBackground(
-        useSettingsStore.getState().themeId,
-        Boolean(useSettingsStore.getState().backgroundImagePath) &&
-          useSettingsStore.getState().backgroundImageOpacity > 0,
+        settings.themeId,
+        settings.backgroundImagePath && settings.backgroundImageOpacity > 0
+          ? settings.terminalBackgroundImageOpacity
+          : 0,
+        settings.backgroundImageTextColor,
+        true,
       ),
       linkHint: linkHintRef.current,
       onOpenLocalUrl: (url) => onOpenPreviewRef.current?.(url),
@@ -1216,9 +1227,18 @@ export function TerminalView({
   useEffect(() => {
     const handle = handleRef.current;
     if (handle) {
-      handle.term.options.theme = terminalThemeWithBackground(themeId, backgroundImageActive);
+      handle.term.options.theme = terminalThemeWithBackground(
+        themeId,
+        effectiveBackgroundImageOpacity,
+        backgroundImageTextColor,
+        true,
+      );
     }
-  }, [themeId, backgroundImageActive]);
+  }, [
+    themeId,
+    effectiveBackgroundImageOpacity,
+    backgroundImageTextColor,
+  ]);
 
   // The pane's inner padding is configurable via a settings-panel slider,
   // which fires this effect on every value while the user drags — apply it
@@ -1438,18 +1458,15 @@ export function TerminalView({
     let unlisten: (() => void) | null = null;
 
     const pointInContainer = (x: number, y: number): boolean => {
-      const rect = container.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      const points =
-        dpr === 1
-          ? [[x, y]]
-          : [
-              [x, y],
-              [x / dpr, y / dpr],
-            ];
-      return points.some(
-        ([lx, ly]) => lx >= rect.left && lx <= rect.right && ly >= rect.top && ly <= rect.bottom,
-      );
+      return nativePointInElement(container, x, y);
+    };
+
+    const pointInDedicatedDropZone = (x: number, y: number): boolean => {
+      const zone = document.querySelector<HTMLElement>("[data-native-file-drop-zone]");
+      if (!zone) {
+        return false;
+      }
+      return nativePointInElement(zone, x, y);
     };
 
     void getCurrentWebview()
@@ -1459,6 +1476,11 @@ export function TerminalView({
         }
         const payload = event.payload;
         if (payload.type === "leave") {
+          nativeDragPathsRef.current = [];
+          setExternalFileDragging(false);
+          return;
+        }
+        if (pointInDedicatedDropZone(payload.position.x, payload.position.y)) {
           nativeDragPathsRef.current = [];
           setExternalFileDragging(false);
           return;
@@ -1559,7 +1581,12 @@ export function TerminalView({
       ref={containerRef}
       className="relative h-full w-full"
       style={{
-        backgroundColor: terminalThemeWithBackground(themeId, backgroundImageActive).background,
+        backgroundColor: terminalThemeWithBackground(
+          themeId,
+          effectiveBackgroundImageOpacity,
+          backgroundImageTextColor,
+          true,
+        ).background,
       }}
       onDragEnter={(event) => {
         if (nativeDragPathsRef.current.length > 0) {

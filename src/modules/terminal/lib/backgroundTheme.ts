@@ -1,8 +1,6 @@
 import type { ITheme } from "@xterm/xterm";
+import { backgroundSurfaceAlphas } from "@/lib/backgroundAppearance";
 import { getTheme } from "@/themes/themes";
-
-const DARK_TERMINAL_SURFACE_ALPHA = 0.82;
-const LIGHT_TERMINAL_SURFACE_ALPHA = 0.88;
 
 function hexToRgba(hex: string, alpha: number): string {
   const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
@@ -19,18 +17,22 @@ function hexToRgba(hex: string, alpha: number): string {
 /** Keep xterm's palette intact while letting the app-managed image show through. */
 export function terminalThemeWithBackground(
   themeId: string,
-  backgroundActive: boolean,
+  backgroundOpacity: number,
+  textColor: string | null = null,
+  backgroundPaintedByHost = false,
 ): ITheme {
   const theme = getTheme(themeId);
-  if (!backgroundActive || !theme.terminal.background) {
+  if (backgroundOpacity <= 0 || !theme.terminal.background) {
     return theme.terminal;
   }
-  const alpha =
-    theme.appearance === "light"
-      ? LIGHT_TERMINAL_SURFACE_ALPHA
-      : DARK_TERMINAL_SURFACE_ALPHA;
   return {
     ...theme.terminal,
-    background: hexToRgba(theme.terminal.background, alpha),
+    background: hexToRgba(
+      theme.terminal.background,
+      backgroundPaintedByHost
+        ? 0
+        : backgroundSurfaceAlphas(themeId, backgroundOpacity).surface,
+    ),
+    ...(textColor ? { foreground: textColor } : {}),
   };
 }
