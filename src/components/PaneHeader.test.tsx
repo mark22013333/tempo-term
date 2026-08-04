@@ -21,6 +21,7 @@ describe("PaneHeader", () => {
     );
 
     expect(screen.getByText("somewhere")).toBeInTheDocument();
+    expect(screen.getByText("somewhere").parentElement).toHaveClass("bg-bg");
     expect(screen.getByRole("button", { name: "act" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "workspace.closePane" }));
     expect(onClose).toHaveBeenCalledTimes(1);

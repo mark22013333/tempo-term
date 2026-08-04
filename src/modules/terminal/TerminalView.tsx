@@ -1,4 +1,3 @@
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
@@ -96,11 +95,16 @@ import { resumeFlagsFor } from "@/modules/sessions/lib/resumeCommand";
 import type { AiSessionBinding } from "./lib/terminalLayout";
 
 import { IS_MAC, IS_WINDOWS, openModifierLabel } from "@/lib/platform";
-import { nativePointInElement } from "@/lib/nativeDragCoordinates";
+import {
+  listenToNativeDragDrop,
+  nativePointInElement,
+} from "@/lib/nativeDragCoordinates";
 import { selectTerminalFontFamily, useFontStore } from "@/stores/fontStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useBackgroundImage } from "@/lib/useBackgroundImage";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { useTabsStore } from "@/stores/tabsStore";
+import { useUiStore } from "@/stores/uiStore";
 import { terminalThemeWithBackground } from "./lib/backgroundTheme";
 
 // The home dir never changes within a session; fetch it once and share it so
@@ -214,16 +218,14 @@ export function TerminalView({
   const fontFamily = useFontStore(selectTerminalFontFamily);
   const fontSize = useFontStore((s) => s.fontSize);
   const themeId = useSettingsStore((s) => s.themeId);
-  const backgroundImagePath = useSettingsStore((s) => s.backgroundImagePath);
-  const backgroundImageOpacity = useSettingsStore((s) => s.backgroundImageOpacity);
-  const terminalBackgroundImageOpacity = useSettingsStore(
-    (s) => s.terminalBackgroundImageOpacity,
-  );
-  const backgroundImageTextColor = useSettingsStore((s) => s.backgroundImageTextColor);
-  const effectiveBackgroundImageOpacity =
-    backgroundImagePath && backgroundImageOpacity > 0
-      ? terminalBackgroundImageOpacity
-      : 0;
+  const {
+    terminalOpacity: terminalBackgroundImageOpacity,
+    textColor: backgroundImageTextColor,
+    active: backgroundImageActive,
+  } = useBackgroundImage();
+  const effectiveBackgroundImageOpacity = backgroundImageActive
+    ? terminalBackgroundImageOpacity
+    : 0;
   const terminalPadding = useSettingsStore((s) => s.terminalPadding);
   const [connecting, setConnecting] = useState(true);
   // For SSH panes restored after an app relaunch: the freshSshLeaves set is empty,
@@ -1454,74 +1456,54 @@ export function TerminalView({
     if (!container) {
       return;
     }
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-
     const pointInContainer = (x: number, y: number): boolean => {
       return nativePointInElement(container, x, y);
     };
 
-    const pointInDedicatedDropZone = (x: number, y: number): boolean => {
-      const zone = document.querySelector<HTMLElement>("[data-native-file-drop-zone]");
-      if (!zone) {
-        return false;
-      }
-      return nativePointInElement(zone, x, y);
-    };
-
-    void getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (disposed) {
-          return;
-        }
-        const payload = event.payload;
-        if (payload.type === "leave") {
-          nativeDragPathsRef.current = [];
-          setExternalFileDragging(false);
-          return;
-        }
-        if (pointInDedicatedDropZone(payload.position.x, payload.position.y)) {
-          nativeDragPathsRef.current = [];
-          setExternalFileDragging(false);
-          return;
-        }
-        if (payload.type === "enter") {
-          const paths = payload.paths;
-          nativeDragPathsRef.current = paths;
-          setExternalFileDragging(
-            paths.length > 0 && pointInContainer(payload.position.x, payload.position.y),
-          );
-          return;
-        }
-        if (!pointInContainer(payload.position.x, payload.position.y)) {
-          setExternalFileDragging(false);
-          return;
-        }
-        if (payload.type === "over") {
-          setExternalFileDragging(nativeDragPathsRef.current.length > 0);
-          return;
-        }
-        const paths = payload.paths;
+    const stopListening = listenToNativeDragDrop((event) => {
+      const payload = event.payload;
+      if (payload.type === "leave") {
         nativeDragPathsRef.current = [];
         setExternalFileDragging(false);
-        if (paths.length > 0) {
-          void handlePathDrop(paths);
-        }
-      })
-      .then((fn) => {
-        if (disposed) {
-          fn();
-        } else {
-          unlisten = fn;
-        }
-      })
-      .catch(() => {});
-
-    return () => {
-      disposed = true;
+        return;
+      }
+      // The settings preview owns native image drops while its modal is open.
+      // Consume any event it does not recognize so an image can never leak
+      // through to the terminal and paste its filesystem path.
+      if (useUiStore.getState().settingsOpen) {
+        nativeDragPathsRef.current = [];
+        setExternalFileDragging(false);
+        return true;
+      }
+      if (payload.type === "enter") {
+        const paths = payload.paths;
+        nativeDragPathsRef.current = paths;
+        setExternalFileDragging(
+          paths.length > 0 && pointInContainer(payload.position.x, payload.position.y),
+        );
+        return pointInContainer(payload.position.x, payload.position.y);
+      }
+      if (!pointInContainer(payload.position.x, payload.position.y)) {
+        setExternalFileDragging(false);
+        return false;
+      }
+      if (payload.type === "over") {
+        setExternalFileDragging(nativeDragPathsRef.current.length > 0);
+        return true;
+      }
+      const paths = payload.paths;
       nativeDragPathsRef.current = [];
       setExternalFileDragging(false);
-      unlisten?.();
+      if (paths.length > 0) {
+        void handlePathDrop(paths);
+      }
+      return true;
+    });
+
+    return () => {
+      nativeDragPathsRef.current = [];
+      setExternalFileDragging(false);
+      stopListening();
     };
   }, []);
 

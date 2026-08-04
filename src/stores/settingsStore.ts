@@ -162,9 +162,12 @@ function clampZoom(value: number): number {
   return Math.round(clamped * 10) / 10;
 }
 
-function clampBackgroundImageOpacity(value: number): number {
+function clampBackgroundImageOpacity(
+  value: number,
+  fallback = DEFAULT_BACKGROUND_IMAGE_OPACITY,
+): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
-    return DEFAULT_BACKGROUND_IMAGE_OPACITY;
+    return fallback;
   }
   return Math.min(
     MAX_BACKGROUND_IMAGE_OPACITY,
@@ -172,11 +175,10 @@ function clampBackgroundImageOpacity(value: number): number {
   );
 }
 
-function normalizeBackgroundImageTextColor(value: string | null): string | null {
-  if (value === null) {
-    return null;
-  }
-  return /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : null;
+function normalizeBackgroundImageTextColor(value: unknown): string | null {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
+    ? value.toLowerCase()
+    : null;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -224,7 +226,10 @@ export const useSettingsStore = create<SettingsState>()(
         set({ backgroundImageOpacity: clampBackgroundImageOpacity(opacity) }),
       setTerminalBackgroundImageOpacity: (opacity) =>
         set({
-          terminalBackgroundImageOpacity: clampBackgroundImageOpacity(opacity),
+          terminalBackgroundImageOpacity: clampBackgroundImageOpacity(
+            opacity,
+            DEFAULT_TERMINAL_BACKGROUND_IMAGE_OPACITY,
+          ),
         }),
       setBackgroundImageScope: (backgroundImageScope) => set({ backgroundImageScope }),
       setBackgroundImageTextColor: (backgroundImageTextColor) =>
@@ -257,6 +262,30 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: SETTINGS_STORAGE_KEY,
+      merge: (persisted, current) => {
+        const stored = (persisted ?? {}) as Partial<SettingsState>;
+        return {
+          ...current,
+          ...stored,
+          backgroundImagePath:
+            typeof stored.backgroundImagePath === "string"
+              ? stored.backgroundImagePath
+              : null,
+          backgroundImageOpacity: clampBackgroundImageOpacity(
+            stored.backgroundImageOpacity ?? current.backgroundImageOpacity,
+          ),
+          terminalBackgroundImageOpacity: clampBackgroundImageOpacity(
+            stored.terminalBackgroundImageOpacity ??
+              current.terminalBackgroundImageOpacity,
+            DEFAULT_TERMINAL_BACKGROUND_IMAGE_OPACITY,
+          ),
+          backgroundImageScope:
+            stored.backgroundImageScope === "window" ? "window" : "workspace",
+          backgroundImageTextColor: normalizeBackgroundImageTextColor(
+            stored.backgroundImageTextColor,
+          ),
+        };
+      },
     },
   ),
 );

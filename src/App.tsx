@@ -27,6 +27,7 @@ import { focusedTerminalOps } from "@/modules/terminal/lib/terminalBus";
 import { getPreviewControls, type PreviewControls } from "@/modules/preview/lib/previewControls";
 import { menuCopy, menuPaste, menuSelectAll } from "@/lib/editActions";
 import { backgroundSurfaceStyle } from "@/lib/backgroundAppearance";
+import { useBackgroundImage } from "@/lib/useBackgroundImage";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { BackgroundImageLayer } from "@/components/BackgroundImageLayer";
 import { FileFinder } from "@/modules/explorer/FileFinder";
@@ -155,14 +156,13 @@ function App() {
   const { t } = useTranslation();
   const themeId = useSettingsStore((s) => s.themeId);
   const uiZoom = useSettingsStore((s) => s.uiZoom);
-  const backgroundImagePath = useSettingsStore((s) => s.backgroundImagePath);
-  const backgroundImageOpacity = useSettingsStore((s) => s.backgroundImageOpacity);
-  const backgroundImageScope = useSettingsStore((s) => s.backgroundImageScope);
-  const backgroundImageTextColor = useSettingsStore((s) => s.backgroundImageTextColor);
-  const windowBackgroundActive =
-    Boolean(backgroundImagePath) &&
-    backgroundImageOpacity > 0 &&
-    backgroundImageScope === "window";
+  const {
+    path: backgroundImagePath,
+    opacity: backgroundImageOpacity,
+    scope: backgroundImageScope,
+    textColor: backgroundImageTextColor,
+    active: windowBackgroundActive,
+  } = useBackgroundImage("window");
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const worktreesModal = useUiStore((s) => s.worktreesModal);
   const setupWizardOpen = useUiStore((s) => s.setupWizardOpen);

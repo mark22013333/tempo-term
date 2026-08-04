@@ -64,6 +64,7 @@ import { shouldShowPreview } from "@/modules/preview/lib/previewWebview";
 import { useRemoteExplorerRoot } from "@/modules/ssh/lib/useRemoteExplorerRoot";
 import { useOsc7FallbackHint } from "@/modules/ssh/lib/useOsc7FallbackHint";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useBackgroundImage } from "@/lib/useBackgroundImage";
 import { terminalThemeWithBackground } from "./lib/backgroundTheme";
 
 const MIN_FRACTION = 0.1;
@@ -88,13 +89,12 @@ const HEADERLESS_KINDS = new Set<PaneContent["kind"]>([
 export function PaneTabContent({ tab }: { tab: Tab }) {
   const { t } = useTranslation();
   const themeId = useSettingsStore((s) => s.themeId);
-  const backgroundImagePath = useSettingsStore((s) => s.backgroundImagePath);
-  const backgroundImageOpacity = useSettingsStore((s) => s.backgroundImageOpacity);
-  const terminalBackgroundImageOpacity = useSettingsStore(
-    (s) => s.terminalBackgroundImageOpacity,
-  );
+  const {
+    terminalOpacity: terminalBackgroundImageOpacity,
+    active: backgroundImageActive,
+  } = useBackgroundImage();
   const terminalPaneBackground =
-    backgroundImagePath && backgroundImageOpacity > 0
+    backgroundImageActive
       ? terminalThemeWithBackground(
           themeId,
           terminalBackgroundImageOpacity,
@@ -462,6 +462,10 @@ export function PaneTabContent({ tab }: { tab: Tab }) {
                     : undefined,
               }}
               className={`flex flex-col p-1 ${
+                backgroundImageActive && pane.content?.kind !== "terminal"
+                  ? "wallpaper-pane-chrome "
+                  : ""
+              }${
                 multiple ? (active ? "border border-accent/40" : "border border-border") : ""
               }`}
             >

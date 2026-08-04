@@ -19,14 +19,19 @@ function elementWithRect(): Element {
 
 describe("nativePointInElement", () => {
   it("accepts logical coordinates inside the target", () => {
-    expect(nativePointInElement(elementWithRect(), 100, 80, 1)).toBe(true);
+    expect(nativePointInElement(elementWithRect(), 100, 80, 2, false)).toBe(true);
   });
 
-  it("also accepts physical coordinates on scaled displays", () => {
-    expect(nativePointInElement(elementWithRect(), 200, 160, 2)).toBe(true);
+  it("converts physical coordinates on scaled displays", () => {
+    expect(nativePointInElement(elementWithRect(), 200, 160, 2, true)).toBe(true);
   });
 
-  it("rejects points outside both coordinate representations", () => {
-    expect(nativePointInElement(elementWithRect(), 800, 600, 2)).toBe(false);
+  it("does not also accept the raw physical point as a logical point", () => {
+    expect(nativePointInElement(elementWithRect(), 400, 200, 2, true)).toBe(true);
+    expect(nativePointInElement(elementWithRect(), 400, 200, 2, false)).toBe(false);
+  });
+
+  it("rejects points outside the target", () => {
+    expect(nativePointInElement(elementWithRect(), 800, 600, 2, true)).toBe(false);
   });
 });

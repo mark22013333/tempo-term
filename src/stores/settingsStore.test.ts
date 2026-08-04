@@ -103,6 +103,32 @@ describe("settingsStore", () => {
     expect(useSettingsStore.getState().backgroundImageTextColor).toBeNull();
   });
 
+  it("normalizes corrupted persisted background settings during hydration", async () => {
+    localStorage.setItem(
+      "tempoterm-settings",
+      JSON.stringify({
+        state: {
+          backgroundImagePath: 42,
+          backgroundImageOpacity: 900,
+          terminalBackgroundImageOpacity: "invalid",
+          backgroundImageScope: "outside",
+          backgroundImageTextColor: "var(--danger)",
+        },
+        version: 0,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState()).toMatchObject({
+      backgroundImagePath: null,
+      backgroundImageOpacity: MAX_BACKGROUND_IMAGE_OPACITY,
+      terminalBackgroundImageOpacity: DEFAULT_TERMINAL_BACKGROUND_IMAGE_OPACITY,
+      backgroundImageScope: "workspace",
+      backgroundImageTextColor: null,
+    });
+  });
+
   it("defaults the terminal padding and clamps out-of-range values", () => {
     expect(useSettingsStore.getState().terminalPadding).toBe(DEFAULT_TERMINAL_PADDING);
     useSettingsStore.getState().setTerminalPadding(999);

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@/i18n";
 import { SettingsModal } from "./SettingsModal";
 import { useUiStore } from "@/stores/uiStore";
+import { useBackgroundImageDraftStore } from "@/stores/backgroundImageDraftStore";
 
 // The settings body is a separate concern (and pulls in the whole settings UI);
 // stub it so this test stays focused on the modal chrome's close behavior.
@@ -13,6 +14,7 @@ vi.mock("@/modules/settings/SettingsView", () => ({
 describe("SettingsModal", () => {
   beforeEach(() => {
     useUiStore.setState({ settingsOpen: true });
+    useBackgroundImageDraftStore.getState().cancel();
   });
 
   afterEach(() => {
@@ -41,5 +43,53 @@ describe("SettingsModal", () => {
     fireEvent.click(screen.getByTestId("settings-body"));
 
     expect(useUiStore.getState().settingsOpen).toBe(true);
+  });
+
+  it("Escape returns from live preview and preserves the draft", () => {
+    useBackgroundImageDraftStore.getState().begin({
+      path: "/pictures/draft.png",
+      opacity: 40,
+      terminalOpacity: 50,
+      scope: "workspace",
+      textColor: null,
+    });
+    useBackgroundImageDraftStore.getState().enterPreview();
+    render(<SettingsModal />);
+
+    expect(screen.getByTestId("background-live-preview-layer")).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    expect(useUiStore.getState().settingsOpen).toBe(true);
+    expect(useBackgroundImageDraftStore.getState().previewActive).toBe(false);
+    expect(useBackgroundImageDraftStore.getState().draft?.path).toBe(
+      "/pictures/draft.png",
+    );
+  });
+
+  it("keeps the workspace click-through while the preview controls can collapse", () => {
+    useBackgroundImageDraftStore.getState().begin({
+      path: "/pictures/draft.png",
+      opacity: 40,
+      terminalOpacity: 50,
+      scope: "workspace",
+      textColor: null,
+    });
+    useBackgroundImageDraftStore.getState().enterPreview();
+    render(<SettingsModal />);
+
+    expect(screen.getByTestId("background-live-preview-layer")).toHaveClass(
+      "pointer-events-none",
+    );
+    expect(screen.getByTestId("background-preview-panel")).toHaveClass(
+      "pointer-events-auto",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Collapse preview controls" }),
+    );
+    expect(screen.getByTestId("background-preview-panel-collapsed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Live preview/ }));
+    expect(screen.getByTestId("background-preview-panel")).toBeInTheDocument();
   });
 });

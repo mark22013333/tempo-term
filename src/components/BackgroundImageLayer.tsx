@@ -1,5 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useSettingsStore, type BackgroundImageScope } from "@/stores/settingsStore";
+import { useBackgroundImage } from "@/lib/useBackgroundImage";
+import { useBackgroundImageDraftStore } from "@/stores/backgroundImageDraftStore";
 
 /**
  * Decorative app-managed image painted behind translucent theme surfaces.
@@ -7,11 +9,9 @@ import { useSettingsStore, type BackgroundImageScope } from "@/stores/settingsSt
  * dock columns while window mode naturally covers the full shell.
  */
 export function BackgroundImageLayer({ scope }: { scope: BackgroundImageScope }) {
-  const path = useSettingsStore((state) => state.backgroundImagePath);
-  const opacity = useSettingsStore((state) => state.backgroundImageOpacity);
-  const configuredScope = useSettingsStore((state) => state.backgroundImageScope);
+  const { path, active, previewingDraft } = useBackgroundImage(scope);
 
-  if (!path || opacity <= 0 || configuredScope !== scope) {
+  if (!path || !active) {
     return null;
   }
 
@@ -22,6 +22,13 @@ export function BackgroundImageLayer({ scope }: { scope: BackgroundImageScope })
       aria-hidden="true"
       draggable={false}
       data-testid={`background-image-${scope}`}
+      onError={() => {
+        if (previewingDraft) {
+          useBackgroundImageDraftStore.getState().markImageFailed();
+        } else {
+          useSettingsStore.getState().clearBackgroundImage();
+        }
+      }}
       className="pointer-events-none absolute inset-0 -z-10 h-full w-full select-none object-cover object-center"
     />
   );

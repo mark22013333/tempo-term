@@ -10,7 +10,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::Manager;
 
@@ -32,7 +33,7 @@ impl fmt::Display for AppearanceError {
         let message = match self {
             Self::InvalidFile => "The selected image could not be read.",
             Self::UnsupportedFormat => "Choose a PNG, JPEG, or WebP image.",
-            Self::FileTooLarge => "Choose an image smaller than 20 MB.",
+            Self::FileTooLarge => "Choose an image no larger than 20 MiB.",
             Self::StorageUnavailable => "The background image could not be saved.",
         };
         formatter.write_str(message)
@@ -44,7 +45,13 @@ impl serde::Serialize for AppearanceError {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        let code = match self {
+            Self::InvalidFile => "invalidFile",
+            Self::UnsupportedFormat => "unsupportedFormat",
+            Self::FileTooLarge => "fileTooLarge",
+            Self::StorageUnavailable => "storageUnavailable",
+        };
+        serializer.serialize_str(code)
     }
 }
 
@@ -111,8 +118,27 @@ fn is_managed_background(path: &Path) -> bool {
         path.extension()
             .and_then(|extension| extension.to_str())
             .map(|extension| extension.to_ascii_lowercase()),
-        Some(extension) if matches!(extension.as_str(), "png" | "jpg" | "webp" | "tmp")
+        Some(extension) if matches!(extension.as_str(), "png" | "jpg" | "webp")
     )
+}
+
+fn remove_file_with_retry(path: &Path) -> Result<(), AppearanceError> {
+    const MAX_ATTEMPTS: usize = 3;
+    for attempt in 0..MAX_ATTEMPTS {
+        match fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error)
+                if attempt + 1 < MAX_ATTEMPTS
+                    && (error.kind() == std::io::ErrorKind::PermissionDenied
+                        || error.raw_os_error() == Some(32)) =>
+            {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return Err(AppearanceError::StorageUnavailable),
+        }
+    }
+    Err(AppearanceError::StorageUnavailable)
 }
 
 fn remove_managed_backgrounds(dir: &Path, keep: Option<&Path>) -> Result<(), AppearanceError> {
@@ -132,7 +158,7 @@ fn remove_managed_backgrounds(dir: &Path, keep: Option<&Path>) -> Result<(), App
             .metadata()
             .map_err(|_| AppearanceError::StorageUnavailable)?;
         if metadata.is_file() {
-            fs::remove_file(path).map_err(|_| AppearanceError::StorageUnavailable)?;
+            remove_file_with_retry(&path)?;
         }
     }
     Ok(())
@@ -146,7 +172,10 @@ fn save_background_image_into(
     let source_path = fs::canonicalize(source_path).map_err(|_| AppearanceError::InvalidFile)?;
     let expected_format =
         format_from_extension(&source_path).ok_or(AppearanceError::UnsupportedFormat)?;
-    let metadata = fs::metadata(&source_path).map_err(|_| AppearanceError::InvalidFile)?;
+    let mut source = File::open(&source_path).map_err(|_| AppearanceError::InvalidFile)?;
+    let metadata = source
+        .metadata()
+        .map_err(|_| AppearanceError::InvalidFile)?;
     if !metadata.is_file() {
         return Err(AppearanceError::InvalidFile);
     }
@@ -154,13 +183,12 @@ fn save_background_image_into(
         return Err(AppearanceError::FileTooLarge);
     }
 
-    let mut source = File::open(&source_path).map_err(|_| AppearanceError::InvalidFile)?;
-    let mut header = [0_u8; 16];
-    let header_len = source
-        .read(&mut header)
+    let mut header = Vec::with_capacity(16);
+    std::io::Read::by_ref(&mut source)
+        .take(16)
+        .read_to_end(&mut header)
         .map_err(|_| AppearanceError::InvalidFile)?;
-    let detected_format =
-        format_from_header(&header[..header_len]).ok_or(AppearanceError::UnsupportedFormat)?;
+    let detected_format = format_from_header(&header).ok_or(AppearanceError::UnsupportedFormat)?;
     if detected_format != expected_format {
         return Err(AppearanceError::UnsupportedFormat);
     }
@@ -187,6 +215,10 @@ fn save_background_image_into(
         return Err(AppearanceError::FileTooLarge);
     }
     output.flush().map_err(|_| {
+        let _ = fs::remove_file(&temporary);
+        AppearanceError::StorageUnavailable
+    })?;
+    output.sync_all().map_err(|_| {
         let _ = fs::remove_file(&temporary);
         AppearanceError::StorageUnavailable
     })?;
@@ -374,11 +406,20 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let managed = write_test_file(&root, "background-1.png", b"managed");
         let unrelated = write_test_file(&root, "keep.png", b"unrelated");
+        let in_flight = write_test_file(&root, "background-2.tmp", b"in flight");
 
         remove_managed_backgrounds(&root, None).unwrap();
         assert!(!managed.exists());
         assert!(unrelated.exists());
+        assert!(in_flight.exists());
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn removing_an_already_missing_file_is_successful() {
+        let root = test_dir("remove-missing");
+        let _ = fs::remove_dir_all(&root);
+        remove_file_with_retry(&root.join("background-missing.png")).unwrap();
     }
 }

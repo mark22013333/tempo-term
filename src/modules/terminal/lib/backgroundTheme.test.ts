@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { getTheme } from "@/themes/themes";
-import { terminalThemeWithBackground } from "./backgroundTheme";
+import { colorWithAlpha, terminalThemeWithBackground } from "./backgroundTheme";
 
 describe("terminalThemeWithBackground", () => {
+  it("applies alpha to short hex, rgb, and other CSS colours", () => {
+    expect(colorWithAlpha("#abc", 0.5)).toBe("rgba(170, 187, 204, 0.5)");
+    expect(colorWithAlpha("rgb(10, 20, 30)", 0.4)).toBe("rgba(10, 20, 30, 0.4)");
+    expect(colorWithAlpha("navy", 0.25)).toBe(
+      "color-mix(in srgb, navy 25%, transparent)",
+    );
+  });
+
   it("returns the normal opaque theme without a configured background", () => {
     expect(terminalThemeWithBackground("vitesse-dark", 0)).toBe(
       getTheme("vitesse-dark").terminal,

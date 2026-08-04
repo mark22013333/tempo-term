@@ -4,27 +4,51 @@ import { X } from "lucide-react";
 import { SettingsView } from "@/modules/settings/SettingsView";
 import { useUiStore } from "@/stores/uiStore";
 import { useOverlayGuard } from "@/lib/overlayGuard";
+import { BackgroundImagePreviewPanel } from "@/modules/settings/BackgroundImagePreviewPanel";
+import { useBackgroundImageDraftStore } from "@/stores/backgroundImageDraftStore";
 
 export function SettingsModal() {
   const { t } = useTranslation();
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
-  const close = () => setSettingsOpen(false);
+  const previewActive = useBackgroundImageDraftStore((s) => s.previewActive);
+  const cancelBackgroundDraft = useBackgroundImageDraftStore((s) => s.cancel);
+  const leaveBackgroundPreview = useBackgroundImageDraftStore((s) => s.leavePreview);
+  const close = () => {
+    cancelBackgroundDraft();
+    setSettingsOpen(false);
+  };
 
   // This modal is only mounted while open, so hide the native preview webview
   // (which floats above all DOM) for as long as it is on screen.
-  useOverlayGuard(true);
+  useOverlayGuard(!previewActive);
 
   // Esc closes the modal, matching the other dialogs in the app. The Zustand
   // setter is a stable reference, so the listener binds once.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setSettingsOpen(false);
+        if (useBackgroundImageDraftStore.getState().previewActive) {
+          leaveBackgroundPreview();
+        } else {
+          cancelBackgroundDraft();
+          setSettingsOpen(false);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setSettingsOpen]);
+  }, [cancelBackgroundDraft, leaveBackgroundPreview, setSettingsOpen]);
+
+  if (previewActive) {
+    return (
+      <div
+        data-testid="background-live-preview-layer"
+        className="pointer-events-none fixed inset-0 z-50"
+      >
+        <BackgroundImagePreviewPanel />
+      </div>
+    );
+  }
 
   return (
     <div

@@ -13,6 +13,7 @@ import { TabsArea } from "@/components/TabsArea";
 import { BackgroundImageLayer } from "@/components/BackgroundImageLayer";
 import { Resizer } from "@/components/Resizer";
 import { backgroundSurfaceStyle } from "@/lib/backgroundAppearance";
+import { useBackgroundImage } from "@/lib/useBackgroundImage";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUiStore, type DockSide, type PanelId } from "@/stores/uiStore";
 import { PANEL_REGISTRY } from "./panelRegistry";
@@ -37,15 +38,12 @@ export function DockShell() {
   const panelOrder = useUiStore((s) => s.panelOrder);
   const visible = useUiStore((s) => s.visible);
   const width = useUiStore((s) => s.width);
-  const backgroundImagePath = useSettingsStore((s) => s.backgroundImagePath);
-  const backgroundImageOpacity = useSettingsStore((s) => s.backgroundImageOpacity);
-  const backgroundImageScope = useSettingsStore((s) => s.backgroundImageScope);
-  const backgroundImageTextColor = useSettingsStore((s) => s.backgroundImageTextColor);
+  const {
+    opacity: backgroundImageOpacity,
+    textColor: backgroundImageTextColor,
+    active: workspaceBackgroundActive,
+  } = useBackgroundImage("workspace");
   const themeId = useSettingsStore((s) => s.themeId);
-  const workspaceBackgroundActive =
-    Boolean(backgroundImagePath) &&
-    backgroundImageOpacity > 0 &&
-    backgroundImageScope === "workspace";
 
   const sensors = useSensors(useSensor(PointerSensor, POINTER_SENSOR_OPTIONS));
   const [draggingId, setDraggingId] = useState<PanelId | null>(null);

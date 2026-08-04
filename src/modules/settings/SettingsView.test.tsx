@@ -42,8 +42,8 @@ vi.mock("./ShortcutsSettingsSection", () => ({
 vi.mock("./AboutSettingsSection", () => ({
   AboutSettingsSection: () => <div data-testid="section-about" />,
 }));
-vi.mock("./BackgroundImageSettings", () => ({
-  BackgroundImageSettings: () => <div data-testid="background-image-settings" />,
+vi.mock("./BackgroundImageSettingsSection", () => ({
+  BackgroundImageSettingsSection: () => <div data-testid="background-image-settings" />,
 }));
 
 // Snapshot the store (actions included) at load so each test starts from a
