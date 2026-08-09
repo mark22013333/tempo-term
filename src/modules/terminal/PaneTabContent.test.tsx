@@ -7,6 +7,8 @@ import { useEntryDragStore } from "@/modules/explorer/lib/dragEntry";
 import { useNoteDragStore } from "@/modules/notes/lib/noteDrag";
 import { useSshDragStore } from "@/modules/ssh/lib/sshDrag";
 import { leaf, splitLeaf } from "./lib/terminalLayout";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { backgroundSurfaceAlphas } from "@/lib/backgroundAppearance";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -40,6 +42,43 @@ describe("PaneTabContent file-drop dispatch", () => {
       hoverPointerPct: null,
       pendingDrop: null,
     });
+    useSettingsStore.setState({
+      themeId: "vitesse-dark",
+      backgroundImagePath: null,
+      backgroundImageOpacity: 20,
+      terminalBackgroundImageOpacity: 35,
+    });
+  });
+
+  it("uses one continuous wallpaper tint across the terminal header and gutter", () => {
+    const { tabId } = makeSinglePaneTab();
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)!;
+    useSettingsStore.setState({
+      backgroundImagePath: "/app-data/appearance/background.png",
+    });
+
+    const { container } = render(<PaneTabContent tab={tab} />);
+
+    const expectedAlpha = backgroundSurfaceAlphas("vitesse-dark", 35).surface;
+    expect(container.querySelector("[data-pane-leaf]")).toHaveStyle({
+      backgroundColor: `rgba(34, 34, 34, ${expectedAlpha})`,
+    });
+  });
+
+  it("masks the structural gutter of a non-terminal split pane", () => {
+    const { tabId, leafId } = makeSinglePaneTab();
+    useTabsStore.getState().splitPaneWith(tabId, leafId, { kind: "launcher" }, "row");
+    useSettingsStore.setState({
+      backgroundImagePath: "/app-data/appearance/background.png",
+    });
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)!;
+
+    const { container } = render(<PaneTabContent tab={tab} />);
+    const leaves = container.querySelectorAll("[data-pane-leaf]");
+
+    expect(leaves).toHaveLength(2);
+    expect(leaves[0]).not.toHaveClass("wallpaper-pane-chrome");
+    expect(leaves[1]).toHaveClass("wallpaper-pane-chrome");
   });
 
   it("center drop on an editor pane replaces its content (existing per-kind behavior, unchanged)", () => {
