@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendAlongside,
   computeLayout,
   computeSplitters,
   findPaneContent,
@@ -7,6 +8,7 @@ import {
   gridLayout,
   leaf,
   leafIds,
+  matchesGridLayout,
   paneIdAt,
   removeLeaf,
   resolveDropZone,
@@ -259,6 +261,76 @@ describe("gridLayout", () => {
       expect(top.rect.height).toBeCloseTo(50, 5);
       expect(bottom.rect.height).toBeCloseTo(50, 5);
     }
+  });
+});
+
+describe("matchesGridLayout", () => {
+  function order(n: number): string[] {
+    return Array.from({ length: n }, (_, i) => `p${i}`);
+  }
+
+  function grid(ids: string[]): LayoutNode {
+    return gridLayout(ids.map((id) => ({ id, content: { kind: "terminal" } as const })));
+  }
+
+  it("recognises the tree gridLayout itself builds, at every size", () => {
+    for (const n of [1, 2, 3, 4, 5, 8]) {
+      const ids = order(n);
+      expect(matchesGridLayout(grid(ids), ids)).toBe(true);
+    }
+  });
+
+  it("ignores split ratios, so dragging a splitter does not leave the grid", () => {
+    const ids = order(2);
+    const tree = grid(ids);
+    expect(matchesGridLayout(setSizesById(tree, splitId(tree), [0.8, 0.2]), ids)).toBe(true);
+  });
+
+  it("rejects a hand-stacked pair, which the grid would have laid out as columns", () => {
+    expect(matchesGridLayout(splitLeaf(leaf("a"), "a", "col", "b"), ["a", "b"])).toBe(false);
+  });
+
+  it("accepts a hand-split pair laid out left/right — that is the grid", () => {
+    expect(matchesGridLayout(splitLeaf(leaf("a"), "a", "row", "b"), ["a", "b"])).toBe(true);
+  });
+
+  it("rejects a grid whose panes sit in a different add-order", () => {
+    expect(matchesGridLayout(grid(["a", "b"]), ["b", "a"])).toBe(false);
+  });
+
+  it("rejects an empty paneOrder rather than asking gridLayout to build nothing", () => {
+    expect(matchesGridLayout(leaf("a"), [])).toBe(false);
+  });
+});
+
+describe("appendAlongside", () => {
+  it("splits a lone pane left/right", () => {
+    const tree = appendAlongside(leaf("a"), "b", { kind: "terminal" });
+    const panes = computeLayout(tree);
+    expect(panes.map((p) => Math.round(p.rect.width))).toEqual([50, 50]);
+    expect(panes.every((p) => Math.round(p.rect.height) === 100)).toBe(true);
+  });
+
+  it("inherits the tree's own direction, so a stack keeps stacking", () => {
+    const stacked = splitLeaf(leaf("a"), "a", "col", "b");
+    const panes = computeLayout(appendAlongside(stacked, "c", { kind: "terminal" }));
+    expect(panes.every((p) => Math.round(p.rect.width) === 100)).toBe(true);
+  });
+
+  it("gives every pane an even share instead of halving what is already there", () => {
+    let tree: LayoutNode = splitLeaf(leaf("a"), "a", "col", "b");
+    tree = appendAlongside(tree, "c", { kind: "terminal" });
+    tree = appendAlongside(tree, "d", { kind: "terminal" });
+
+    for (const pane of computeLayout(tree)) {
+      expect(pane.rect.height).toBeCloseTo(25, 5);
+    }
+  });
+
+  it("leaves every existing split's direction and ratio untouched", () => {
+    const stacked = splitLeaf(leaf("a"), "a", "col", "b");
+    const tree = appendAlongside(stacked, "c", { kind: "terminal" });
+    expect(tree.kind === "split" && tree.children[0]).toEqual(stacked);
   });
 });
 

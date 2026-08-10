@@ -8,11 +8,13 @@ import { decideHtmlPreviewOpen, previewLocalPath } from "@/modules/preview/lib/h
 import { fileUrl } from "@/modules/explorer/lib/dragEntry";
 import { fileOpenContent } from "@/modules/explorer/lib/fileOpenContent";
 import {
+  appendAlongside,
   computeLayout,
   findPaneContent,
   gridLayout,
   leaf,
   leafIds,
+  matchesGridLayout,
   paneOf,
   removeLeaf,
   setLeafPane,
@@ -100,8 +102,10 @@ interface TabsState {
   openSessionsTab: () => string;
   /**
    * Open sidebar content (explorer file, note, or SSH connection). When the
-   * active tab is a real working tab, this splits beside its current
-   * right-most pane. When there is no active tab, or the active tab is a
+   * active tab is a real working tab, this adds a pane to it: a tab still on
+   * the canonical grid is re-gridded for the new count, one the user arranged
+   * themselves keeps its shape and takes the pane alongside. When there is no
+   * active tab, or the active tab is a
    * Launcher tab (kind === "launcher" — TabsArea.tsx renders LauncherPanel
    * for those directly and ignores their paneTree), this opens a fresh tab
    * and, for the launcher case, closes the old one — the same two-step
@@ -757,14 +761,21 @@ export const useTabsStore = create<TabsState>()(
     if (isFreshSsh) {
       markFreshSshLeaf(newId);
     }
-    const panes: OrderedPane[] = [
+    // Recomputing the canonical grid is only right while the tab still is one.
+    // Once the user has arranged the panes themselves — stacked a pair with
+    // the split shortcut, dropped a file onto an edge — re-gridding would
+    // flatten every one of their splits back into columns on the next sidebar
+    // click. Such a tab gets the new pane appended alongside instead.
+    const regrid = (): OrderedPane[] => [
       ...activeTab.paneOrder.map((id) => ({
         id,
         content: findPaneContent(activeTab.paneTree, id)!,
       })),
       { id: newId, content },
     ];
-    const paneTree = gridLayout(panes);
+    const paneTree = matchesGridLayout(activeTab.paneTree, activeTab.paneOrder)
+      ? gridLayout(regrid())
+      : appendAlongside(activeTab.paneTree, newId, content);
     set((state) => ({
       tabs: state.tabs.map((t) =>
         t.id === activeTab.id
@@ -970,8 +981,12 @@ export const useTabsStore = create<TabsState>()(
             ? {
                 ...t,
                 // A fresh split shows the launcher so the user picks what goes in it.
-                // Directional and pane-specific (unlike openFromSidebar's grid rebuild)
-                // — the user is choosing exactly which pane to split and which way.
+                // Directional and pane-specific — the user is choosing exactly which
+                // pane to split and which way, so the tree is edited in place rather
+                // than rebuilt. A stacked split also takes the tab off the canonical
+                // grid, so later sidebar opens stop rebuilding it (matchesGridLayout);
+                // a plain left/right split of a single pane *is* the grid, and
+                // re-gridding that can't flip a direction anyway.
                 paneTree: splitLeaf(t.paneTree, t.activeLeafId, direction, newId, {
                   kind: "launcher",
                 }),
