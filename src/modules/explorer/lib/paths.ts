@@ -8,9 +8,22 @@
 /** Match a run of either slash flavour, so the helpers work on both platforms. */
 const SEPARATORS = /[\\/]+/;
 
-/** Whichever separator the path itself uses, defaulting to "/". */
+/** Matches a Windows drive designator and nothing else: "C:", "D:". */
+const DRIVE = /^[A-Za-z]:$/;
+
+/**
+ * Whichever separator the path itself uses, defaulting to "/". A leading drive
+ * designator counts as a Windows path even before any separator shows up, so
+ * "C:" on its own still resolves to "\". Kept in step with the same-named
+ * helper in `@/lib/breadcrumb` — two path helpers answering this differently
+ * is worse than the duplication.
+ */
 function separatorOf(path: string): string {
-  return path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  if (path.includes("/")) {
+    return "/";
+  }
+  // slice(0, 2) is the drive head of "C:\Windows", or the whole of "C:".
+  return path.includes("\\") || DRIVE.test(path.slice(0, 2)) ? "\\" : "/";
 }
 
 /** The final path segment ("/a/b/c.txt" -> "c.txt"), ignoring trailing slashes. */
@@ -29,7 +42,11 @@ export function dirname(path: string): string {
     // No separator, or the only one is the leading root slash.
     return index === 0 ? trimmed.slice(0, 1) : trimmed;
   }
-  return trimmed.slice(0, index);
+  const parent = trimmed.slice(0, index);
+  // "C:\file.txt" sits at the root of drive C:, and the root only keeps that
+  // meaning with its separator — a bare "C:" means the drive's *current
+  // directory* instead, which is per-drive process state.
+  return DRIVE.test(parent) ? `${parent}${trimmed.charAt(index)}` : parent;
 }
 
 /** Join a directory and a child segment with the directory's own separator. */

@@ -32,6 +32,13 @@ describe("dirname", () => {
   it("handles Windows separators", () => {
     expect(dirname("C:\\Users\\me\\file.txt")).toBe("C:\\Users\\me");
   });
+
+  it("keeps the separator on a Windows drive root", () => {
+    // A bare "C:" means the current directory on drive C:, not its root, so
+    // read_dir on it lists whatever folder the process happens to sit in.
+    expect(dirname("C:\\file.txt")).toBe("C:\\");
+    expect(dirname("C:\\Windows")).toBe("C:\\");
+  });
 });
 
 describe("joinPath", () => {
@@ -46,6 +53,11 @@ describe("joinPath", () => {
 
   it("uses backslashes on Windows-style directories", () => {
     expect(joinPath("C:\\a\\b", "c.txt")).toBe("C:\\a\\b\\c.txt");
+  });
+
+  it("recognises a drive designator as a Windows path before any separator", () => {
+    expect(joinPath("C:\\", "Windows")).toBe("C:\\Windows");
+    expect(joinPath("C:", "Windows")).toBe("C:\\Windows");
   });
 });
 
