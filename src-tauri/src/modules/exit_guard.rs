@@ -57,6 +57,7 @@ fn close_window_sessions(app: &AppHandle, owner: &str) {
 
 /// macOS's custom Cmd+Q menu item enters here instead of using AppKit's
 /// predefined `terminate:` selector, which cannot be cancelled by Tauri.
+#[cfg(target_os = "macos")]
 pub fn request_quit(app: &AppHandle) {
     let guard = app.state::<ExitGuardState>();
     let count = all_session_count(app);
