@@ -11,6 +11,7 @@ import {
 import { Combobox } from "@/components/Combobox";
 import { Tooltip } from "@/components/Tooltip";
 import { basename } from "@/modules/explorer/lib/paths";
+import { BranchFilter } from "./BranchFilter";
 import type { WorktreeItem } from "./lib/gitGraphBridge";
 import type { Branch, CommitOrder } from "./types";
 
@@ -53,6 +54,11 @@ function samePath(a: string, b: string): boolean {
 export interface GitGraphToolbarLabels {
   branches: string;
   showAll: string;
+  filterPlaceholder: string;
+  /** Badge marking the checked-out branch in the filter list. Deliberately NOT
+   * "HEAD": the graph rows already show an `origin/HEAD` ref chip, and two
+   * HEAD-ish labels with different meanings read as the same thing. */
+  currentBadge: string;
   showRemoteBranches: string;
   search: string;
   searchPlaceholder: string;
@@ -74,8 +80,9 @@ export interface GitGraphToolbarLabels {
 
 interface GitGraphToolbarProps {
   branches: Branch[];
-  selectedBranch: string | null;
-  onSelectBranch: (branch: string | null) => void;
+  /** Branch names the graph is filtered to; empty means Show All. */
+  selectedBranches: string[];
+  onSelectBranches: (branches: string[]) => void;
   includeRemotes: boolean;
   onToggleRemotes: (value: boolean) => void;
   includeTags: boolean;
@@ -102,8 +109,8 @@ interface GitGraphToolbarProps {
 
 export function GitGraphToolbar({
   branches,
-  selectedBranch,
-  onSelectBranch,
+  selectedBranches,
+  onSelectBranches,
   includeRemotes,
   onToggleRemotes,
   includeTags,
@@ -155,14 +162,15 @@ export function GitGraphToolbar({
   const locals = branches.filter((b) => !b.isRemote);
   const remotes = branches.filter((b) => b.isRemote);
 
-  // Combobox takes a flat string list. "Show All" doubles as the sentinel that
-  // maps back to null; remote names already carry their "origin/" prefix so the
-  // two groups stay distinguishable without optgroup headers.
-  const branchOptions = [
-    labels.showAll,
-    ...locals.map((b) => b.name),
-    ...(includeRemotes ? remotes.map((b) => b.name) : []),
-  ];
+  // The filter list puts recently-active branches first — with hundreds of
+  // branches the one being looked for is almost always fresh. Name breaks
+  // timestamp ties so the order stays stable.
+  const byRecency = (a: Branch, b: Branch) =>
+    (b.lastCommitAt ?? 0) - (a.lastCommitAt ?? 0) || a.name.localeCompare(b.name);
+  const filterLocals = [...locals].sort(byRecency).map((b) => b.name);
+  const filterRemotes = includeRemotes
+    ? [...remotes].sort(byRecency).map((b) => b.name)
+    : [];
 
   // Toggles render either as the gear popover (roomy) or rows in the overflow
   // menu (compact). Remote-branches lives here too once the toolbar is compact.
@@ -241,13 +249,18 @@ export function GitGraphToolbar({
         {showBranchControls && (
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-fg-subtle">
             <span className="shrink-0">{labels.branches}:</span>
-            <Combobox
-              value={selectedBranch ?? labels.showAll}
-              options={branchOptions}
-              onChange={(v) => onSelectBranch(v === labels.showAll ? null : v)}
-              ariaLabel={labels.branches}
-              textClassName="text-[13px]"
-              noTruncate
+            <BranchFilter
+              locals={filterLocals}
+              remotes={filterRemotes}
+              selected={selectedBranches}
+              currentBranch={currentBranch}
+              onChange={onSelectBranches}
+              labels={{
+                ariaLabel: labels.branches,
+                showAll: labels.showAll,
+                searchPlaceholder: labels.filterPlaceholder,
+                currentBadge: labels.currentBadge,
+              }}
             />
           </div>
         )}

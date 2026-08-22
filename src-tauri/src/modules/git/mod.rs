@@ -68,6 +68,10 @@ pub struct BranchInfo {
     pub is_current: bool,
     #[serde(rename = "isRemote")]
     pub is_remote: bool,
+    /// 分支 tip commit 的 committer 時間（Unix 秒），拿不到時為 0。
+    /// 前端用它把「最近動過」的分支排前面。
+    #[serde(rename = "lastCommitAt")]
+    pub last_commit_at: i64,
 }
 
 /// 一個 commit 變更的單一檔案。
@@ -98,7 +102,8 @@ pub enum CommitOrder {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct GraphOptions {
-    pub branch: Option<String>,
+    /// 篩選用的分支清單；空清單代表「全部分支」。
+    pub branches: Vec<String>,
     pub include_remotes: bool,
     pub include_tags: bool,
     pub include_stashes: bool,
@@ -114,19 +119,22 @@ fn order_flag(order: CommitOrder) -> &'static str {
 }
 
 /// 把顯示選項翻成 git log 的 ref 範圍參數。純函式方便測試。
-/// 指定分支時只給該分支，沒指定用 --branches 含全部本地分支；
-/// remote/tag/stash 開關各自疊加。
+/// 指定分支時只給那些分支（多選為聯集）——remote/tag/stash 開關不再疊加，
+/// 否則 `--remotes` 會把所有遠端分支的歷史聯集進來，預設開關全開時篩選
+/// 形同失效；沒指定分支才用 --branches 含全部本地分支，並依開關疊加其他
+/// ref 範圍。
 fn build_log_refs(options: &GraphOptions) -> Vec<String> {
-    let mut refs: Vec<String> = Vec::new();
-    let branch = options
-        .branch
-        .as_deref()
-        .map(str::trim)
-        .filter(|b| !b.is_empty());
-    match branch {
-        Some(name) => refs.push(name.to_string()),
-        None => refs.push("--branches".to_string()),
+    let picked: Vec<String> = options
+        .branches
+        .iter()
+        .map(|b| b.trim())
+        .filter(|b| !b.is_empty())
+        .map(str::to_string)
+        .collect();
+    if !picked.is_empty() {
+        return picked;
     }
+    let mut refs: Vec<String> = vec!["--branches".to_string()];
     if options.include_remotes {
         refs.push("--remotes".to_string());
     }
@@ -1309,13 +1317,11 @@ pub fn graph_log(
     let skip_arg = format!("--skip={skip}");
 
     // 指定分支會當成位置參數傳給 git，先擋掉開頭是 - 的值。
-    if let Some(branch) = options
-        .branch
-        .as_deref()
-        .map(str::trim)
-        .filter(|b| !b.is_empty())
-    {
-        ensure_not_flag(branch)?;
+    for branch in &options.branches {
+        let branch = branch.trim();
+        if !branch.is_empty() {
+            ensure_not_flag(branch)?;
+        }
     }
 
     let ref_args = build_log_refs(options);
@@ -1356,6 +1362,7 @@ pub fn branches(repo_path: &str) -> Result<Vec<BranchInfo>, String> {
         .map_err(|e| e.message().to_string())?;
     for entry in local {
         let (branch, _) = entry.map_err(|e| e.message().to_string())?;
+        let last_commit_at = branch_tip_time(&branch);
         if let Some(name) = branch.name().map_err(|e| e.message().to_string())? {
             let name = name.to_string();
             let is_current = Some(&name) == head_name.as_ref();
@@ -1363,6 +1370,7 @@ pub fn branches(repo_path: &str) -> Result<Vec<BranchInfo>, String> {
                 name,
                 is_current,
                 is_remote: false,
+                last_commit_at,
             });
         }
     }
@@ -1372,6 +1380,7 @@ pub fn branches(repo_path: &str) -> Result<Vec<BranchInfo>, String> {
         .map_err(|e| e.message().to_string())?;
     for entry in remote {
         let (branch, _) = entry.map_err(|e| e.message().to_string())?;
+        let last_commit_at = branch_tip_time(&branch);
         if let Some(name) = branch.name().map_err(|e| e.message().to_string())? {
             // 跳過 origin/HEAD 這種 symbolic ref，它只是指向預設分支。
             if name.ends_with("/HEAD") {
@@ -1381,11 +1390,22 @@ pub fn branches(repo_path: &str) -> Result<Vec<BranchInfo>, String> {
                 name: name.to_string(),
                 is_current: false,
                 is_remote: true,
+                last_commit_at,
             });
         }
     }
 
     Ok(out)
+}
+
+/// 分支 tip commit 的 committer 時間（Unix 秒）；解析失敗以 0 墊底，
+/// 讓排序時自然沉到最後而不是整個清單失敗。
+fn branch_tip_time(branch: &git2::Branch<'_>) -> i64 {
+    branch
+        .get()
+        .peel_to_commit()
+        .map(|c| c.time().seconds())
+        .unwrap_or(0)
 }
 
 /// Check out an existing branch.
@@ -2497,10 +2517,12 @@ mod tests {
         assert!(page.has_more);
 
         let branches = branches(&path).unwrap();
-        assert_eq!(
-            branches,
-            vec![BranchInfo { name: "main".into(), is_current: true, is_remote: false }]
-        );
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].name, "main");
+        assert!(branches[0].is_current);
+        assert!(!branches[0].is_remote);
+        // tip 是剛剛才提交的，時間必須被填上（0 是解析失敗的墊底值）。
+        assert!(branches[0].last_commit_at > 0);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2855,16 +2877,52 @@ mod tests {
     #[test]
     fn build_log_refs_specific_branch() {
         let options = GraphOptions {
-            branch: Some("main".to_string()),
+            branches: vec!["main".to_string()],
             ..GraphOptions::default()
         };
         assert_eq!(build_log_refs(&options), vec!["main".to_string()]);
     }
 
     #[test]
+    fn build_log_refs_specific_branch_ignores_ref_toggles() {
+        // 顯示開關預設全開；若還疊加 --remotes/--tags，選了分支的圖
+        // 仍會畫出所有遠端分支的歷史，篩選形同失效。
+        let options = GraphOptions {
+            branches: vec!["main".to_string()],
+            include_remotes: true,
+            include_tags: true,
+            include_stashes: true,
+            order: CommitOrder::Date,
+        };
+        assert_eq!(build_log_refs(&options), vec!["main".to_string()]);
+    }
+
+    #[test]
+    fn build_log_refs_multiple_branches_union() {
+        let options = GraphOptions {
+            branches: vec!["main".to_string(), "origin/feature".to_string()],
+            include_remotes: true,
+            ..GraphOptions::default()
+        };
+        assert_eq!(
+            build_log_refs(&options),
+            vec!["main".to_string(), "origin/feature".to_string()]
+        );
+    }
+
+    #[test]
+    fn build_log_refs_blank_entries_fall_back_to_show_all() {
+        let options = GraphOptions {
+            branches: vec!["   ".to_string(), "".to_string()],
+            ..GraphOptions::default()
+        };
+        assert_eq!(build_log_refs(&options), vec!["--branches".to_string()]);
+    }
+
+    #[test]
     fn build_log_refs_toggles_stack() {
         let options = GraphOptions {
-            branch: None,
+            branches: Vec::new(),
             include_remotes: true,
             include_tags: true,
             include_stashes: true,
@@ -2881,14 +2939,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_log_refs_blank_branch_is_show_all() {
-        let options = GraphOptions {
-            branch: Some("   ".to_string()),
-            ..GraphOptions::default()
-        };
-        assert_eq!(build_log_refs(&options), vec!["--branches".to_string()]);
-    }
 
     #[test]
     fn order_flag_maps_each_commit_order() {

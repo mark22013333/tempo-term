@@ -10,6 +10,8 @@
   "toolbar": {
     "branches": "Branches",
     "showAll": "Show All",
+    "filterPlaceholder": "Search branches…",
+    "currentBadge": "current",
     "showRemoteBranches": "Show Remote Branches",
     "search": "Search commits",
     "searchPlaceholder": "Search message, author, hash…",
