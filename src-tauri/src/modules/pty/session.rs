@@ -17,6 +17,7 @@ use super::shell::{
 
 /// A single live terminal session.
 pub struct Session {
+    owner_label: Mutex<Option<String>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
@@ -160,6 +161,7 @@ pub fn spawn_with_sinks(
     rows: u16,
     cmd: CommandBuilder,
     shell_name: String,
+    owner_label: Option<String>,
     on_bytes: impl Fn(Vec<u8>) -> bool + Send + 'static,
     on_exit: impl FnOnce(i32) + Send + 'static,
 ) -> Result<u32, String> {
@@ -178,6 +180,7 @@ pub fn spawn_with_sinks(
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
     let session = Arc::new(Session {
+        owner_label: Mutex::new(owner_label),
         writer: Arc::new(Mutex::new(writer)),
         master: Mutex::new(pair.master),
         killer: Mutex::new(killer),
@@ -291,6 +294,7 @@ pub fn spawn(
     cwd: Option<String>,
     suggestions: bool,
     shell_override: Option<String>,
+    owner_label: String,
     app: &tauri::AppHandle,
     on_data: Channel<Response>,
     on_exit: Channel<i32>,
@@ -323,6 +327,7 @@ pub fn spawn(
         rows,
         cmd,
         shell_name,
+        Some(owner_label),
         move |bytes| {
             if let Some(tx) = &log_tx {
                 // Drop on a full channel rather than stall the reader thread.
@@ -486,6 +491,35 @@ pub fn close_all(state: &PtyState) {
     }
 }
 
+pub fn session_count(state: &PtyState) -> usize {
+    state.sessions.read().unwrap().len()
+}
+
+pub fn owned_count(state: &PtyState, owner_label: &str) -> usize {
+    state
+        .sessions
+        .read()
+        .unwrap()
+        .values()
+        .filter(|session| session.owner_label.lock().unwrap().as_deref() == Some(owner_label))
+        .count()
+}
+
+pub fn close_owned(state: &PtyState, owner_label: &str) {
+    let ids: Vec<u32> = state
+        .sessions
+        .read()
+        .unwrap()
+        .iter()
+        .filter_map(|(id, session)| {
+            (session.owner_label.lock().unwrap().as_deref() == Some(owner_label)).then_some(*id)
+        })
+        .collect();
+    for id in ids {
+        close(state, id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,6 +544,7 @@ mod tests {
             24,
             cmd,
             "test".to_string(),
+            None,
             move |bytes| {
                 sink.lock().unwrap().extend_from_slice(&bytes);
                 true
@@ -550,8 +585,18 @@ mod tests {
     fn registers_session_in_state() {
         let state = PtyState::new();
         let cmd = CommandBuilder::new("/bin/echo");
-        let id = spawn_with_sinks(&state, state.alloc_id(), 80, 24, cmd, "echo".to_string(), |_| true, |_| {})
-            .expect("spawn should succeed");
+        let id = spawn_with_sinks(
+            &state,
+            state.alloc_id(),
+            80,
+            24,
+            cmd,
+            "echo".to_string(),
+            None,
+            |_| true,
+            |_| {},
+        )
+        .expect("spawn should succeed");
         assert!(state.get(id).is_ok());
     }
 
@@ -572,6 +617,7 @@ mod tests {
             24,
             cmd,
             "echo".to_string(),
+            None,
             |_| true,
             move |code| {
                 let _ = exit_tx.send(code);
@@ -586,6 +632,28 @@ mod tests {
             state.get(id).is_err(),
             "session should be pruned from the registry before the exit event fires"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registers_owner_with_the_session_atomically() {
+        let state = PtyState::new();
+        let cmd = CommandBuilder::new("/bin/cat");
+        let id = spawn_with_sinks(
+            &state,
+            state.alloc_id(),
+            80,
+            24,
+            cmd,
+            "cat".to_string(),
+            Some("secondary".to_string()),
+            |_| true,
+            |_| {},
+        )
+        .expect("spawn should succeed");
+
+        assert_eq!(owned_count(&state, "secondary"), 1);
+        close(&state, id);
     }
 
     #[cfg(target_os = "macos")]

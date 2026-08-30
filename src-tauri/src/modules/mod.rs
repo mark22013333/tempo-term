@@ -8,6 +8,7 @@ pub mod codex_progress;
 pub mod codex_status_hook;
 pub mod clipboard;
 pub mod editor_watch;
+pub mod exit_guard;
 pub mod fonts;
 pub mod fs;
 pub mod git;

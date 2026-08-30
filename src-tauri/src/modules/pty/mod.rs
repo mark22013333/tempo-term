@@ -4,6 +4,9 @@ mod session;
 pub mod shell;
 
 pub use session::PtyState;
+pub(crate) use session::{
+    close_owned as close_owned_sessions, owned_count as owned_session_count, session_count,
+};
 
 use tauri::ipc::{Channel, Response};
 use tauri::State;
@@ -12,6 +15,7 @@ use tauri::State;
 #[allow(clippy::too_many_arguments)]
 pub fn pty_open(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     state: State<'_, PtyState>,
     cols: u16,
     rows: u16,
@@ -28,6 +32,7 @@ pub fn pty_open(
         cwd,
         suggestions,
         shell_override,
+        window.label().to_string(),
         &app,
         on_data,
         on_exit,

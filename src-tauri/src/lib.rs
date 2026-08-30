@@ -6,6 +6,7 @@ use modules::appearance::{
     appearance_remove_background_image, appearance_save_background_image,
 };
 use modules::fonts::fonts_report;
+use modules::exit_guard::{exit_guard_configure, ExitGuardState};
 use modules::fs::{
     fs_create_dir, fs_create_file, fs_delete, fs_grep, fs_home_dir, fs_is_file, fs_list_files,
     fs_read_dir, fs_read_file, fs_rename, fs_reveal, fs_write_file,
@@ -147,6 +148,7 @@ pub fn run() {
                 .build(),
         )
         .manage(PtyState::new())
+        .manage(ExitGuardState::new())
         .manage(SshState::new())
         .manage(SftpState::new())
         .manage(ClaudeProgressState::new())
@@ -226,6 +228,7 @@ pub fn run() {
             pty_cwd,
             pty_close,
             pty_close_all,
+            exit_guard_configure,
             app_build_info,
             open_new_window,
             appearance_save_background_image,
@@ -354,6 +357,9 @@ pub fn run() {
             detect_tools,
             install_tool
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            modules::exit_guard::handle_run_event(app_handle, &event);
+        });
 }
