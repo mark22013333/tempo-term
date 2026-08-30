@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchSystemStats, type SystemStats } from "./sysinfoBridge";
+import { useWindowVisible } from "@/lib/windowActivity";
 
 /** How often the status bar refreshes the system metrics. */
 const POLL_INTERVAL_MS = 2000;
@@ -11,6 +12,7 @@ const POLL_INTERVAL_MS = 2000;
  */
 export function useSystemStats(): SystemStats | null {
   const [stats, setStats] = useState<SystemStats | null>(null);
+  const windowVisible = useWindowVisible();
 
   useEffect(() => {
     let active = true;
@@ -31,13 +33,14 @@ export function useSystemStats(): SystemStats | null {
           // A failed poll just leaves the previous value on screen.
         });
     };
+    if (!windowVisible) return;
     poll();
     const interval = setInterval(poll, POLL_INTERVAL_MS);
     return () => {
       active = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [windowVisible]);
 
   return stats;
 }
