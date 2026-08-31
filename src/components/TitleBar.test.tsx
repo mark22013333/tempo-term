@@ -124,6 +124,23 @@ describe("TitleBar", () => {
     expect(closeWindow).toHaveBeenCalledOnce();
   });
 
+  it("renders the window controls outside the app tree, fixed above every body-level backdrop", () => {
+    const { container } = render(<TitleBar />);
+    const minimize = screen.getByLabelText("Minimize");
+    // A z-index only competes inside its own stacking context, and App's root
+    // is `isolate`. CommitInputModal and the tab-close ConfirmDialog portal
+    // their `fixed inset-0` backdrops to document.body — outside that context —
+    // so no z-index inside the tree, however large, can climb above them. The
+    // controls have to leave the tree the same way and out-rank them there.
+    expect(container.contains(minimize)).toBe(false);
+    expect(document.body.contains(minimize)).toBe(true);
+    const group = minimize.closest(".fixed");
+    expect(group).not.toBeNull();
+    const TALLEST_BODY_LEVEL_BACKDROP_Z = 195; // CommitInputModal
+    const match = /(?:^|\s)z-\[(\d+)\]/.exec(group!.className);
+    expect(match && Number(match[1])).toBeGreaterThan(TALLEST_BODY_LEVEL_BACKDROP_Z);
+  });
+
   it("marks the brand mark as a deep drag region so the icon and title drag the window", () => {
     render(<TitleBar />);
     const brand = screen.getByText("TempoTerm").closest("[data-tauri-drag-region]");
