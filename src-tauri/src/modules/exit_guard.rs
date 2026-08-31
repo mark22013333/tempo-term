@@ -34,6 +34,7 @@ impl ExitGuardState {
         }
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn language(&self) -> String {
         self.language.lock().unwrap().clone()
     }

@@ -90,6 +90,7 @@ fn build_app_submenu(
         .build()
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn quit_menu_title(app_name: &str, language: &str) -> String {
     if language.starts_with("zh") {
         format!("結束 {app_name}")
