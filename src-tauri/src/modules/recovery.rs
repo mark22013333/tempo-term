@@ -5,9 +5,13 @@
 //! state that cannot safely be written to disk (notably dirty editor buffers),
 //! records privacy-preserving incidents, and reloads one workspace WebView.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+#[cfg(any(target_os = "macos", test))]
+use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+#[cfg(any(target_os = "macos", test))]
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -19,7 +23,9 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 const MAX_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 const MAX_WINDOW_BYTES: usize = 32 * 1024 * 1024;
+#[cfg(any(target_os = "macos", test))]
 const CRASH_RELOAD_WINDOW_MS: u64 = 30_000;
+#[cfg(any(target_os = "macos", test))]
 const CRASH_RELOAD_LIMIT: usize = 3;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -52,7 +58,9 @@ pub struct RecoveryState {
     snapshots: Mutex<HashMap<String, EditorSnapshot>>,
     notices: Mutex<HashMap<String, RecoveryNotice>>,
     log_path: Mutex<Option<PathBuf>>,
+    #[cfg(any(target_os = "macos", test))]
     recent_crashes: Mutex<HashMap<String, VecDeque<u64>>>,
+    #[cfg(any(target_os = "macos", test))]
     log_write_lock: Arc<Mutex<()>>,
 }
 
@@ -64,7 +72,9 @@ impl RecoveryState {
             snapshots: Mutex::new(HashMap::new()),
             notices: Mutex::new(HashMap::new()),
             log_path: Mutex::new(None),
+            #[cfg(any(target_os = "macos", test))]
             recent_crashes: Mutex::new(HashMap::new()),
+            #[cfg(any(target_os = "macos", test))]
             log_write_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -72,6 +82,7 @@ impl RecoveryState {
     /// Records a renderer crash and returns whether an automatic reload is
     /// still allowed. The third crash within the rolling window is stopped so
     /// a persistently broken renderer cannot enter an infinite reload loop.
+    #[cfg(any(target_os = "macos", test))]
     pub fn record_web_content_termination(&self, window_label: &str) -> bool {
         let now = timestamp_ms();
         let should_reload = {
@@ -82,6 +93,7 @@ impl RecoveryState {
         should_reload
     }
 
+    #[cfg(any(target_os = "macos", test))]
     fn record_incident(&self, window_label: &str, reason: &str, now: u64) {
         let notice = RecoveryNotice {
             incident_id: format!("{}-{now}", std::process::id()),
@@ -102,6 +114,7 @@ impl RecoveryState {
         *self.log_path.lock().unwrap() = Some(path);
     }
 
+    #[cfg(any(target_os = "macos", test))]
     fn write_incident_log(&self, window_label: String, reason: String, timestamp_ms: u64) {
         let Some(path) = self.log_path.lock().unwrap().clone() else {
             return;
@@ -116,6 +129,7 @@ impl RecoveryState {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn register_crash(history: &mut VecDeque<u64>, now: u64) -> bool {
     while history
         .front()
@@ -127,6 +141,7 @@ fn register_crash(history: &mut VecDeque<u64>, now: u64) -> bool {
     history.len() < CRASH_RELOAD_LIMIT
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn write_incident_log_file(
     path: &std::path::Path,
     window_label: &str,
