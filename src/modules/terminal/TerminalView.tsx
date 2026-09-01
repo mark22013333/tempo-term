@@ -19,6 +19,7 @@ import { openPty, type PtySession } from "./lib/pty-bridge";
 import { openSsh, type SshSession } from "@/modules/ssh/lib/ssh-bridge";
 import { useForwardStatusStore } from "@/modules/ssh/lib/forwardStatusStore";
 import { liveSessionsStore } from "@/modules/ssh/lib/liveSessionsStore";
+import { useWindowVisible } from "@/lib/windowActivity";
 
 /** Narrows a session to PtySession (which has cwd/foregroundCommand). */
 function isPtySession(s: PtySession | SshSession): s is PtySession {
@@ -171,10 +172,14 @@ export function TerminalView({
   onOpenFile,
   onOpenPreview,
 }: TerminalViewProps) {
+  const windowVisible = useWindowVisible();
   const leafIdRef = useRef(leafId);
   leafIdRef.current = leafId;
   const activeRef = useRef(active);
   activeRef.current = active;
+  const isActiveTabRef = useRef(isActiveTab);
+  isActiveTabRef.current = isActiveTab;
+  const wasWindowVisibleRef = useRef(windowVisible);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1206,6 +1211,36 @@ export function TerminalView({
     return () => cancelAnimationFrame(frame);
   }, [active, isActiveTab]);
 
+  // Commit a fresh terminal frame on foreground return and send a resize so
+  // full-screen TUIs repaint after WebKit has suspended their backing layer.
+  useEffect(() => {
+    const wasVisible = wasWindowVisibleRef.current;
+    wasWindowVisibleRef.current = windowVisible;
+    if (
+      !windowVisible
+      || wasVisible
+      || !activeRef.current
+      || !isActiveTabRef.current
+    ) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const handle = handleRef.current;
+      const container = containerRef.current;
+      if (!handle || !container || container.clientWidth <= 0 || container.clientHeight <= 0) {
+        return;
+      }
+      try {
+        handle.fit.fit();
+        handle.term.refresh(0, Math.max(0, handle.term.rows - 1));
+      } catch {
+        // Ignore a transient zero-size container while the window is restoring.
+      }
+      void sessionRef.current?.resize(handle.term.cols, handle.term.rows);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [windowVisible]);
+
   // Apply live font changes from the settings panel to an already-open terminal.
   useEffect(() => {
     const handle = handleRef.current;
@@ -1272,7 +1307,7 @@ export function TerminalView({
   // the file explorer tracks `cd`. SSH panes take a different path below — no
   // cwd() or foregroundCommand() methods, so they ride OSC 7 reports instead.
   useEffect(() => {
-    if (!cwdTracking) {
+    if (!cwdTracking || !windowVisible) {
       return;
     }
     const paneSsh = sshRef.current;
@@ -1428,7 +1463,7 @@ export function TerminalView({
       }
       unsubscribe();
     };
-  }, [cwdTracking]);
+  }, [cwdTracking, windowVisible]);
 
   // Snapshot the cwd when this pane stops being active (e.g. switching tabs), so
   // its last directory is saved between polls. SSH panes skip this — no cwd() method.

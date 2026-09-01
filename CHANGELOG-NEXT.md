@@ -9,6 +9,10 @@
 - Git Graph 的 ref 標籤整併：同名的本地分支與其遠端摺成同一顆標籤、不再各佔一格，origin/HEAD 不再顯示，超出行寬上限的標籤收進 +N 清單，點開後每顆仍可右鍵操作；合併後的標籤右鍵選單同時帶本地與各遠端的操作，不必再記哪顆標籤管哪半邊 (#357)
 - 檔案總管的右鍵選單新增「在瀏覽器開啟」，用內建的網頁預覽開啟檔案，不必先把它開進編輯器再按工具列那顆預覽鈕。開啟位置沿用既有的規則：分頁裡已經有預覽面板就換掉它的內容，單面板分頁就在旁邊分割，已經分割的分頁則使用專屬的預覽分頁。只有內建瀏覽器渲染得出來的檔案才會出現這個選項（HTML、SVG、PDF、圖片與影音），遠端 (SSH) 檔案則不適用 (#347)
 
+### perf
+
+- 視窗不可見時暫停 ports、system stats、preview 與 cwd 更新，回到前景時立即重新整理終端畫面與尺寸；仍可見但沒有焦點的多視窗會維持即時更新 (#369)
+
 ### fix
 
 - 接續 #372：升級索引 schema 版本，強制重掃所有已被舊 parser 快取成空標題的 Codex 對話；compacted 續用檔沒有任何打字紀錄時，標題改從 replay 的使用者發言撈取（僅取標題、不計入訊息數） (#374)
@@ -23,7 +27,7 @@
 
 ### 貢獻者
 
-- @mark22013333 (#355, #356)
+- @mark22013333 (#355, #356, #369)
 - @yw-chan (#348, #349, #350, #357, #360, #361, #364)
 - @oberonlai (#347, #362)
 
@@ -37,6 +41,10 @@
 - A commit row's ref chips are now ordered by what the row is read for: the checked-out branch first, then local branches, tags, remotes with no local twin, and read-only decorations last; the +N overflow therefore hides the least important chips, and origin leads the blocks inside a merged chip instead of following git's reversed enumeration order (#361)
 - Git Graph ref chips are consolidated: a local branch and its same-named remotes fold into one chip instead of taking a slot each, origin/HEAD is no longer drawn, and chips past the row's limit collapse into a +N chip whose list keeps every chip right-clickable; a merged chip's context menu carries the local and each remote's operations, so there is no need to remember which chip owns which half (#357)
 - The explorer's context menu gains "Open in Browser", which opens a file in the built-in web preview instead of making you open it in the editor first and reach for the toolbar's preview button. Where it lands follows the existing rule: replace a preview pane the tab already has, split beside a single-pane tab, or use the dedicated preview tab when the tab is already split. The item only appears for files the built-in browser can actually render (HTML, SVG, PDF, images and media), and never for remote (SSH) files (#347)
+
+### perf
+
+- Pause ports, system stats, preview and cwd updates while a window is not visible, then immediately refresh the terminal frame and size on foreground return; visible but unfocused windows continue updating in multi-window use (#369)
 
 ### fix
 
@@ -52,6 +60,6 @@
 
 ### Contributors
 
-- @mark22013333 (#355, #356)
+- @mark22013333 (#355, #356, #369)
 - @yw-chan (#348, #349, #350, #357, #360, #361, #364)
 - @oberonlai (#347, #362)
