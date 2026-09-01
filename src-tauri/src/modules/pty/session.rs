@@ -932,14 +932,16 @@ mod tests {
     #[test]
     fn registers_session_in_state() {
         let state = PtyState::new();
-        let cmd = CommandBuilder::new("/bin/echo");
+        // Keep the child alive until after the assertion. `/bin/echo` could
+        // exit and let the waiter prune the registry before this thread ran.
+        let cmd = CommandBuilder::new("/bin/cat");
         let id = spawn_with_sinks(
             &state,
             state.alloc_id(),
             80,
             24,
             cmd,
-            "echo".to_string(),
+            "cat".to_string(),
             None,
             None,
             |_| true,
@@ -947,6 +949,7 @@ mod tests {
         )
         .expect("spawn should succeed");
         assert!(state.get(id).is_ok());
+        close(&state, id);
     }
 
     #[test]
