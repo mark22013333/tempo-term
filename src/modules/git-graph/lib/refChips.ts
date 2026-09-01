@@ -49,6 +49,69 @@ function localBranchName(ref: CommitRef): string | null {
   return null;
 }
 
+/** What a reader looks for first on a commit row, by ref kind. */
+const KIND_RANK: Record<string, number> = {
+  head: 0,
+  branch: 1,
+  tag: 2,
+  remote: 3,
+  stash: 4,
+  unknown: 5,
+};
+
+/** "origin" is the remote nearly every repo pushes to; it leads its own kind. */
+function remoteRank(name: string): [number, string] {
+  const remote = splitRemoteRef(name).remote;
+  return [remote === "origin" ? 0 : 1, remote];
+}
+
+/**
+ * Order two chips for the row.
+ *
+ * Git lists decorations in the reverse of the order it walked the refs, so
+ * `refs/remotes/…` lands before `refs/heads/…` — an implementation detail that
+ * means nothing to a reader, and that decides which chips `collapseAfter`
+ * hides. Rank by what the row is actually read for instead: where HEAD is,
+ * then the branches you act on, then the tags, then the remotes with no local
+ * twin here (the ahead/behind case), then the read-only decorations. Ties fall
+ * back to the name, so a row keeps the same shape across refreshes.
+ */
+function compareChips(a: RefChip, b: RefChip): number {
+  const byKind = (KIND_RANK[a.ref.kind] ?? 9) - (KIND_RANK[b.ref.kind] ?? 9);
+  if (byKind !== 0) {
+    return byKind;
+  }
+  if (a.ref.kind === "remote" && b.ref.kind === "remote") {
+    const [rankA, remoteA] = remoteRank(a.ref.name);
+    const [rankB, remoteB] = remoteRank(b.ref.name);
+    if (rankA !== rankB) {
+      return rankA - rankB;
+    }
+    if (remoteA !== remoteB) {
+      return byCodepoint(remoteA, remoteB);
+    }
+  }
+  return byCodepoint(a.ref.name, b.ref.name);
+}
+
+/** Same rule inside a merged chip: origin's block first, then the rest by name. */
+function compareRemotes(a: CommitRef, b: CommitRef): number {
+  const [rankA, remoteA] = remoteRank(a.name);
+  const [rankB, remoteB] = remoteRank(b.name);
+  return rankA - rankB || byCodepoint(remoteA, remoteB);
+}
+
+/**
+ * Deterministic name tiebreak. `localeCompare` follows the runtime's default
+ * collator, which differs between Node (tests) and WKWebView (the app) and
+ * between users' systems — the same repo could paint rows in different orders.
+ * Plain codepoint order is stable everywhere, and ref names are ASCII enough
+ * that nothing linguistic is lost.
+ */
+function byCodepoint(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function isOriginHead(ref: CommitRef): boolean {
   return ref.kind === "remote" && splitRemoteRef(ref.name).branch === "HEAD";
 }
@@ -120,6 +183,16 @@ export function buildRefChips(refs: CommitRef[], options: RefChipOptions): RefCh
       chips.push(soloChip(ref));
     }
   }
+
+  // Sorted after the folding, so a merged chip is ranked as the branch it is
+  // rather than as whichever half of it git happened to list first.
+  for (const chip of chips) {
+    if (chip.remotes.length > 1) {
+      chip.remotes.sort(compareRemotes);
+      refreshMerged(chip);
+    }
+  }
+  chips.sort(compareChips);
 
   const limit = options.collapseAfter;
   if (limit !== null && limit > 0 && chips.length > limit) {
