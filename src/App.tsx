@@ -57,7 +57,6 @@ import { InputContextMenu } from "@/components/InputContextMenu";
 import {
   RECOVERY_RELOAD_MARKER,
   reloadWorkspace,
-  syncRecoverySnapshot,
 } from "@/lib/recovery";
 
 /**
@@ -724,9 +723,6 @@ function App() {
       }),
       listenWebview("menu:reload-workspace", () => {
         void reloadWorkspace().catch(() => {});
-      }),
-      listenWebview("recovery-prepare", () => {
-        void syncRecoverySnapshot().catch(() => {});
       }),
       listenWebview("menu:split-right", () => {
         useTabsStore.getState().splitActivePane("row");

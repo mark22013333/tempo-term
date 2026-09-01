@@ -5,16 +5,22 @@
 //! state that cannot safely be written to disk (notably dirty editor buffers),
 //! records privacy-preserving incidents, and reloads one workspace WebView.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
+#[cfg(target_os = "macos")]
+use tauri::Window;
+#[cfg(target_os = "macos")]
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 const MAX_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 const MAX_WINDOW_BYTES: usize = 32 * 1024 * 1024;
+const CRASH_RELOAD_WINDOW_MS: u64 = 30_000;
+const CRASH_RELOAD_LIMIT: usize = 3;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +52,8 @@ pub struct RecoveryState {
     snapshots: Mutex<HashMap<String, EditorSnapshot>>,
     notices: Mutex<HashMap<String, RecoveryNotice>>,
     log_path: Mutex<Option<PathBuf>>,
+    recent_crashes: Mutex<HashMap<String, VecDeque<u64>>>,
+    log_write_lock: Arc<Mutex<()>>,
 }
 
 impl RecoveryState {
@@ -56,11 +64,25 @@ impl RecoveryState {
             snapshots: Mutex::new(HashMap::new()),
             notices: Mutex::new(HashMap::new()),
             log_path: Mutex::new(None),
+            recent_crashes: Mutex::new(HashMap::new()),
+            log_write_lock: Arc::new(Mutex::new(())),
         }
     }
 
-    pub fn record_incident(&self, window_label: &str, reason: &str) {
+    /// Records a renderer crash and returns whether an automatic reload is
+    /// still allowed. The third crash within the rolling window is stopped so
+    /// a persistently broken renderer cannot enter an infinite reload loop.
+    pub fn record_web_content_termination(&self, window_label: &str) -> bool {
         let now = timestamp_ms();
+        let should_reload = {
+            let mut crashes = self.recent_crashes.lock().unwrap();
+            register_crash(crashes.entry(window_label.to_string()).or_default(), now)
+        };
+        self.record_incident(window_label, "web-content-terminated", now);
+        should_reload
+    }
+
+    fn record_incident(&self, window_label: &str, reason: &str, now: u64) {
         let notice = RecoveryNotice {
             incident_id: format!("{}-{now}", std::process::id()),
             reason: reason.to_string(),
@@ -73,66 +95,93 @@ impl RecoveryState {
             .lock()
             .unwrap()
             .insert(window_label.to_string(), notice);
-        self.write_incident_log(window_label, reason, now);
+        self.write_incident_log(window_label.to_string(), reason.to_string(), now);
     }
 
     pub fn init_log_path(&self, path: PathBuf) {
         *self.log_path.lock().unwrap() = Some(path);
     }
 
-    fn write_incident_log(&self, window_label: &str, reason: &str, timestamp_ms: u64) {
+    fn write_incident_log(&self, window_label: String, reason: String, timestamp_ms: u64) {
         let Some(path) = self.log_path.lock().unwrap().clone() else {
             return;
         };
-        let cutoff = timestamp_ms.saturating_sub(30 * 24 * 60 * 60 * 1000);
-        let mut entries: Vec<serde_json::Value> = std::fs::read_to_string(&path)
-            .ok()
-            .into_iter()
-            .flat_map(|text| {
-                text.lines()
-                    .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|value| {
-                value
-                    .get("timestampMs")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0)
-                    >= cutoff
-            })
-            .collect();
-        entries.push(serde_json::json!({
-            "timestampMs": timestamp_ms,
-            "reason": reason,
-            // Window labels are application-generated (main/win-N), never user paths.
-            "windowLabel": window_label,
-            "os": std::env::consts::OS,
-            "arch": std::env::consts::ARCH,
-        }));
-        if entries.len() > 200 {
-            entries.drain(..entries.len() - 200);
-        }
-        let mut text = entries
-            .into_iter()
-            .filter_map(|entry| serde_json::to_string(&entry).ok())
-            .collect::<Vec<_>>()
-            .join("\n");
-        text.push('\n');
-        // The entry/count limits normally stay far below 1 MiB. Keep a final
-        // byte guard so malformed legacy data can never grow the file forever.
-        if text.len() > 1024 * 1024 {
-            let keep_from = text.len() - 1024 * 1024;
-            let boundary = text[keep_from..]
-                .find('\n')
-                .map(|n| keep_from + n + 1)
-                .unwrap_or(keep_from);
-            text = text[boundary..].to_string();
-        }
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(path, text);
+        let write_lock = Arc::clone(&self.log_write_lock);
+        // This callback originates on AppKit's main thread. Keep all best-effort
+        // filesystem work off it so recovery never makes the native UI hang.
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let _guard = write_lock.lock().unwrap();
+            write_incident_log_file(&path, &window_label, &reason, timestamp_ms);
+        });
     }
+}
+
+fn register_crash(history: &mut VecDeque<u64>, now: u64) -> bool {
+    while history
+        .front()
+        .is_some_and(|timestamp| now.saturating_sub(*timestamp) >= CRASH_RELOAD_WINDOW_MS)
+    {
+        history.pop_front();
+    }
+    history.push_back(now);
+    history.len() < CRASH_RELOAD_LIMIT
+}
+
+fn write_incident_log_file(
+    path: &std::path::Path,
+    window_label: &str,
+    reason: &str,
+    timestamp_ms: u64,
+) {
+    let cutoff = timestamp_ms.saturating_sub(30 * 24 * 60 * 60 * 1000);
+    let mut entries: Vec<serde_json::Value> = std::fs::read_to_string(path)
+        .ok()
+        .into_iter()
+        .flat_map(|text| {
+            text.lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .collect::<Vec<_>>()
+        })
+        .filter(|value| {
+            value
+                .get("timestampMs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                >= cutoff
+        })
+        .collect();
+    entries.push(serde_json::json!({
+        "timestampMs": timestamp_ms,
+        "reason": reason,
+        // Window labels are application-generated (main/win-N), never user paths.
+        "windowLabel": window_label,
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    }));
+    if entries.len() > 200 {
+        entries.drain(..entries.len() - 200);
+    }
+    let mut text = entries
+        .into_iter()
+        .filter_map(|entry| serde_json::to_string(&entry).ok())
+        .collect::<Vec<_>>()
+        .join("\n");
+    text.push('\n');
+    // The entry/count limits normally stay far below 1 MiB. Keep a final
+    // byte guard so malformed legacy data can never grow the file forever.
+    if text.len() > 1024 * 1024 {
+        let keep_from = text.len() - 1024 * 1024;
+        let boundary = text.as_bytes()[keep_from..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|n| keep_from + n + 1)
+            .unwrap_or(text.len());
+        text = text[boundary..].to_string();
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, text);
 }
 
 fn timestamp_ms() -> u64 {
@@ -228,18 +277,51 @@ pub fn close_owned_previews(app: &AppHandle, window_label: &str) {
     }
 }
 
-pub fn reload_workspace(window: &WebviewWindow, reason: &str) -> Result<(), String> {
+/// Ask before attempting another reload once automatic crash recovery has
+/// reached its safety limit. `true` means the user explicitly chose to retry.
+#[cfg(target_os = "macos")]
+pub fn prompt_crash_reload(window: &Window) -> bool {
     let app = window.app_handle();
-    if let Some(state) = app.try_state::<RecoveryState>() {
-        state.record_incident(window.label(), reason);
-    }
+    let language = app
+        .try_state::<crate::modules::exit_guard::ExitGuardState>()
+        .map(|state| state.language())
+        .unwrap_or_else(|| "en".to_string());
+    let (title, message, retry, keep_open) = if language == "zh-TW" {
+        (
+            "TempoTerm 無法自動復原",
+            "工作區在 30 秒內連續停止回應。為避免無限重新載入，TempoTerm 已暫停自動復原。您可以再試一次，或保留目前視窗。",
+            "再試一次",
+            "保留視窗",
+        )
+    } else {
+        (
+            "TempoTerm could not recover automatically",
+            "The workspace stopped responding repeatedly within 30 seconds. TempoTerm paused automatic recovery to prevent an infinite reload loop. You can try once more or keep the current window open.",
+            "Try Again",
+            "Keep Window Open",
+        )
+    };
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Error)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            retry.to_string(),
+            keep_open.to_string(),
+        ))
+        .parent(window)
+        .blocking_show()
+}
+
+pub fn reload_workspace(window: &WebviewWindow) -> Result<(), String> {
+    let app = window.app_handle();
     close_owned_previews(app, window.label());
     window.reload().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub fn recovery_reload_window(window: WebviewWindow) -> Result<(), String> {
-    reload_workspace(&window, "manual")
+    reload_workspace(&window)
 }
 
 #[tauri::command]
@@ -276,5 +358,34 @@ mod tests {
             }],
         };
         assert!(validate_snapshot(&too_large).is_err());
+    }
+
+    #[test]
+    fn third_crash_inside_window_stops_automatic_reload() {
+        let mut history = VecDeque::new();
+        assert!(register_crash(&mut history, 1_000));
+        assert!(register_crash(&mut history, 2_000));
+        assert!(!register_crash(&mut history, 3_000));
+    }
+
+    #[test]
+    fn crash_reload_limit_recovers_after_rolling_window() {
+        let mut history = VecDeque::new();
+        assert!(register_crash(&mut history, 1_000));
+        assert!(register_crash(&mut history, 2_000));
+        assert!(register_crash(&mut history, 31_000));
+        assert_eq!(
+            history.iter().copied().collect::<Vec<_>>(),
+            vec![2_000, 31_000]
+        );
+    }
+
+    #[test]
+    fn crash_reload_limit_is_scoped_per_window() {
+        let state = RecoveryState::new();
+        assert!(state.record_web_content_termination("main"));
+        assert!(state.record_web_content_termination("main"));
+        assert!(!state.record_web_content_termination("main"));
+        assert!(state.record_web_content_termination("win-2"));
     }
 }

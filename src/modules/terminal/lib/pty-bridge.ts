@@ -94,7 +94,7 @@ export async function attachPty(opts: PtyAttachOptions): Promise<PtySession> {
   onData.onmessage = (message) => opts.onData(toBytes(message));
   const onExit = new Channel<number>();
   onExit.onmessage = opts.onExit;
-  await invoke<boolean>("pty_attach", { id: opts.id, onData, onExit });
+  await invoke<void>("pty_attach", { id: opts.id, onData, onExit });
   return sessionHandle(opts.id);
 }
 

@@ -79,7 +79,7 @@ export async function attachSsh(
   onData.onmessage = (message) => onDataMessage(toBytes(message));
   const onExit = new Channel<number>();
   onExit.onmessage = onExitMessage;
-  await invoke<boolean>("ssh_attach", { id, onData, onExit });
+  await invoke<void>("ssh_attach", { id, onData, onExit });
   return sshHandle(id);
 }
 

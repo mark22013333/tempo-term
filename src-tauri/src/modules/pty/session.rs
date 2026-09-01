@@ -36,6 +36,7 @@ struct OutputSink {
     data: Channel<Response>,
     exit: Channel<i32>,
     cursor: u64,
+    needs_truncation_notice: bool,
 }
 
 struct OutputHubInner {
@@ -63,6 +64,7 @@ impl OutputHub {
                 data,
                 exit,
                 cursor: 0,
+                needs_truncation_notice: false,
             }),
             exit_code: None,
             start_seq: 0,
@@ -100,12 +102,18 @@ impl OutputHub {
         }
     }
 
-    fn attach(&self, data: Channel<Response>, exit: Channel<i32>) -> bool {
+    fn attach(&self, data: Channel<Response>, exit: Channel<i32>) {
         let mut inner = self.0.lock().unwrap();
         if !inner.active {
             let cursor = inner.start_seq;
-            inner.sink = Some(OutputSink { data, exit, cursor });
-            return inner.truncated;
+            let needs_truncation_notice = inner.truncated;
+            inner.sink = Some(OutputSink {
+                data,
+                exit,
+                cursor,
+                needs_truncation_notice,
+            });
+            return;
         }
         let mut replay = Vec::with_capacity(inner.backlog.len() + 96);
         if inner.truncated {
@@ -117,16 +125,20 @@ impl OutputHub {
         for chunk in replay.chunks(OUTPUT_SEND_CHUNK) {
             if data.send(Response::new(chunk.to_vec())).is_err() {
                 inner.sink = None;
-                return inner.truncated;
+                return;
             }
         }
         if let Some(code) = inner.exit_code {
             let _ = exit.send(code);
         } else {
             let cursor = inner.next_seq;
-            inner.sink = Some(OutputSink { data, exit, cursor });
+            inner.sink = Some(OutputSink {
+                data,
+                exit,
+                cursor,
+                needs_truncation_notice: false,
+            });
         }
-        inner.truncated
     }
 
     fn set_active(&self, active: bool) {
@@ -142,7 +154,7 @@ impl OutputHub {
         let next_seq = inner.next_seq;
         let backlog: Vec<u8> = inner.backlog.iter().copied().collect();
         if let Some(sink) = inner.sink.as_mut() {
-            let was_truncated = sink.cursor < start_seq;
+            let was_truncated = sink.needs_truncation_notice || sink.cursor < start_seq;
             let offset = sink.cursor.max(start_seq).saturating_sub(start_seq) as usize;
             let mut pending = Vec::new();
             if was_truncated {
@@ -158,6 +170,7 @@ impl OutputHub {
                 }
             }
             sink.cursor = next_seq;
+            sink.needs_truncation_notice = false;
         }
     }
 
@@ -498,7 +511,7 @@ pub fn attach(
     owner_label: &str,
     on_data: Channel<Response>,
     on_exit: Channel<i32>,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     let session = state.get(id)?;
     if session.owner_label.lock().unwrap().as_deref() != Some(owner_label) {
         return Err("pty session belongs to another window".to_string());
@@ -509,7 +522,8 @@ pub fn attach(
         .unwrap()
         .clone()
         .ok_or_else(|| "pty session is not attachable".to_string())?;
-    Ok(hub.attach(on_data, on_exit))
+    hub.attach(on_data, on_exit);
+    Ok(())
 }
 
 pub fn set_window_active(state: &PtyState, owner_label: &str, active: bool) {
@@ -823,7 +837,7 @@ mod tests {
         let hub = OutputHub::new(first_data, first_exit);
         hub.publish(b"one".to_vec());
         let (second_data, second_exit, second) = test_channels();
-        assert!(!hub.attach(second_data, second_exit));
+        hub.attach(second_data, second_exit);
         hub.publish(b"two".to_vec());
         assert_eq!(first.lock().unwrap().concat(), b"one");
         assert_eq!(second.lock().unwrap().concat(), b"onetwo");
@@ -838,6 +852,20 @@ mod tests {
         assert_eq!(inner.backlog.len(), OUTPUT_BACKLOG_CAP);
         assert!(inner.truncated);
         assert_eq!(inner.start_seq, 17);
+    }
+
+    #[test]
+    fn hidden_attach_preserves_truncation_notice_until_activation() {
+        let (data, exit, _) = test_channels();
+        let hub = OutputHub::new(data, exit);
+        hub.set_active(false);
+        hub.publish(vec![b'x'; OUTPUT_BACKLOG_CAP + 1]);
+        let (attached_data, attached_exit, attached) = test_channels();
+        hub.attach(attached_data, attached_exit);
+        assert!(attached.lock().unwrap().is_empty());
+        hub.set_active(true);
+        let output = attached.lock().unwrap().concat();
+        assert!(String::from_utf8_lossy(&output).contains("background output was truncated"));
     }
     use std::sync::mpsc;
     use std::time::Duration;

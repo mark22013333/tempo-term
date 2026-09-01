@@ -143,11 +143,14 @@ pub fn run() {
         }
         let window = webview.window();
         let app = window.app_handle();
-        if let Some(state) = app.try_state::<RecoveryState>() {
-            state.record_incident(window.label(), "web-content-terminated");
+        let automatic_reload_allowed = app
+            .try_state::<RecoveryState>()
+            .map(|state| state.record_web_content_termination(window.label()))
+            .unwrap_or(true);
+        if automatic_reload_allowed || modules::recovery::prompt_crash_reload(&window) {
+            modules::recovery::close_owned_previews(app, window.label());
+            let _ = webview.reload();
         }
-        modules::recovery::close_owned_previews(app, window.label());
-        let _ = webview.reload();
     });
 
     let app = builder

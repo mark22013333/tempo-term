@@ -1291,6 +1291,8 @@ export const useTabsStore = create<TabsState>()(
     {
       name: TABS_STORAGE_KEY,
       storage: createJSONStorage(() => perWindowStorage()),
+      // v3 documents the persisted backend binding. Its runtimeId already
+      // invalidates bindings from earlier app processes; no data rewrite needed.
       version: 3,
       migrate: migratePersistedTabs,
       partialize: (state) => ({

@@ -187,10 +187,7 @@ pub fn init(app: &mut App) -> tauri::Result<()> {
                         let _ = webview_window.emit("recovery-prepare", ());
                         std::thread::spawn(move || {
                             std::thread::sleep(std::time::Duration::from_millis(750));
-                            let _ = crate::modules::recovery::reload_workspace(
-                                &webview_window,
-                                "native-menu",
-                            );
+                            let _ = crate::modules::recovery::reload_workspace(&webview_window);
                         });
                     }
                     return;

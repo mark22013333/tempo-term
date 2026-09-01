@@ -48,7 +48,7 @@ pub fn pty_attach(
     id: u32,
     on_data: Channel<Response>,
     on_exit: Channel<i32>,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     session::attach(&state, id, window.label(), on_data, on_exit)
 }
 
