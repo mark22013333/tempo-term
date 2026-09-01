@@ -44,19 +44,39 @@ pub enum NativeItemKind {
     Predefined,
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct NativeMenuState {
+    model: std::sync::Mutex<Option<NativeMenuModel>>,
+}
+
 /// Event emitted to the focused window when a native menu item is clicked.
 /// Predefined items (copy/paste/undo/etc.) are handled by the system and never
 /// reach `on_menu_event`, so only custom item ids are ever seen here.
 #[cfg(target_os = "macos")]
 pub const NATIVE_MENU_EVENT: &str = "native-menu-click";
+#[cfg(target_os = "macos")]
+pub const QUIT_MENU_ID: &str = "quit-tempoterm";
 
 /// Build the App submenu (About/Services/Hide/Quit): the one macOS requires to
 /// exist for services / hide / quit to work at all. `set_menu` replaces the
 /// entire menu bar, so every rebuild (fallback `init()` and `set_native_menu`)
 /// must prepend this or TempoTerm/about/quit disappear from the menu bar.
 #[cfg(target_os = "macos")]
-fn build_app_submenu(handle: &tauri::AppHandle) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
-    use tauri::menu::{AboutMetadata, SubmenuBuilder};
+fn build_app_submenu(
+    handle: &tauri::AppHandle,
+    language: &str,
+) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+    use tauri::menu::{AboutMetadata, MenuItemBuilder, SubmenuBuilder};
+    // The predefined Quit item calls AppKit `terminate:` directly and bypasses
+    // Tauri's preventable ExitRequested event. Keep the native appearance and
+    // accelerator while routing the action through the Rust exit guard.
+    let quit = MenuItemBuilder::with_id(
+        QUIT_MENU_ID,
+        quit_menu_title(&handle.package_info().name, language),
+    )
+    .accelerator("Cmd+Q")
+    .build(handle)?;
     SubmenuBuilder::new(handle, &handle.package_info().name)
         .about(Some(AboutMetadata::default()))
         .separator()
@@ -66,8 +86,38 @@ fn build_app_submenu(handle: &tauri::AppHandle) -> tauri::Result<tauri::menu::Su
         .hide_others()
         .show_all()
         .separator()
-        .quit()
+        .item(&quit)
         .build()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn quit_menu_title(app_name: &str, language: &str) -> String {
+    if language.starts_with("zh") {
+        format!("結束 {app_name}")
+    } else {
+        format!("Quit {app_name}")
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rebuild_fallback_menu(app: &AppHandle, language: &str) -> tauri::Result<()> {
+    use tauri::menu::{MenuBuilder, SubmenuBuilder};
+
+    let app_menu = build_app_submenu(app, language)?;
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+    let menu = MenuBuilder::new(app)
+        .items(&[&app_menu, &edit_menu])
+        .build()?;
+    app.set_menu(menu)?;
+    Ok(())
 }
 
 /// Build the native macOS menu, reduced to the system minimum (App + Edit).
@@ -95,31 +145,18 @@ pub fn init(app: &mut App) -> tauri::Result<()> {
     // Windows renders the in-window menu bar; no native menu at all.
     #[cfg(target_os = "macos")]
     {
-        use tauri::menu::{MenuBuilder, SubmenuBuilder};
         let handle = app.handle();
-
-        let app_menu = build_app_submenu(handle)?;
-
-        // Edit menu: keeps Cmd+C/V/X/A routed by the system into the webview.
-        let edit_menu = SubmenuBuilder::new(handle, "Edit")
-            .undo()
-            .redo()
-            .separator()
-            .cut()
-            .copy()
-            .paste()
-            .select_all()
-            .build()?;
-
-        let menu = MenuBuilder::new(handle)
-            .items(&[&app_menu, &edit_menu])
-            .build()?;
-        app.set_menu(menu)?;
+        app.manage(NativeMenuState::default());
+        rebuild_fallback_menu(handle, "en")?;
 
         // Dispatch custom item clicks to the focused window; predefined items
         // (copy/paste/undo/etc.) are handled by the system and never reach here.
         app.on_menu_event(|app, event| {
             use tauri::Emitter;
+            if event.id().0 == QUIT_MENU_ID {
+                crate::modules::exit_guard::request_quit(app);
+                return;
+            }
             if let Some(win) = app.get_focused_window() {
                 let id = event.id().0.clone();
                 let _ = win.emit_to(win.label(), NATIVE_MENU_EVENT, id);
@@ -205,9 +242,13 @@ fn build_items(app: &tauri::AppHandle, defs: &[NativeMenuItem]) -> tauri::Result
 /// frontend model. `set_menu` swaps the bar wholesale, so the App submenu
 /// (About/Services/Hide/Quit) is rebuilt and prepended on every call.
 #[cfg(target_os = "macos")]
-fn rebuild_menu(app: &tauri::AppHandle, model: &NativeMenuModel) -> tauri::Result<()> {
+fn rebuild_menu(
+    app: &tauri::AppHandle,
+    model: &NativeMenuModel,
+    language: &str,
+) -> tauri::Result<()> {
     use tauri::menu::{MenuBuilder, SubmenuBuilder};
-    let mut mb = MenuBuilder::new(app).item(&build_app_submenu(app)?);
+    let mut mb = MenuBuilder::new(app).item(&build_app_submenu(app, language)?);
     for menu in &model.menus {
         let built = build_items(app, &menu.items)?;
         // Carry the frontend's menu id onto the muda Submenu id so the menu
@@ -236,11 +277,39 @@ pub fn set_native_menu(app: AppHandle, model: NativeMenuModel) -> Result<(), Str
         // never refreshes (verified on-device), so call it directly and let a
         // rebuild failure bubble to the frontend caller while the previous menu
         // stays in place.
-        rebuild_menu(&app, &model).map_err(|e| e.to_string())
+        let language = app
+            .state::<crate::modules::exit_guard::ExitGuardState>()
+            .language();
+        let state = app.state::<NativeMenuState>();
+        let mut stored_model = state.model.lock().unwrap();
+        rebuild_menu(&app, &model, &language).map_err(|e| e.to_string())?;
+        *stored_model = Some(model);
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (app, model);
+        Ok(())
+    }
+}
+
+/// Rebuild the current macOS menu when the exit guard's language changes.
+/// Keeping the last frontend model avoids replacing its menus with the minimal
+/// startup fallback merely to update the custom Quit item.
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+pub fn refresh_language(app: &AppHandle, language: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let state = app.state::<NativeMenuState>();
+        let stored_model = state.model.lock().unwrap();
+        match stored_model.as_ref() {
+            Some(model) => rebuild_menu(app, model, language),
+            None => rebuild_fallback_menu(app, language),
+        }
+        .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
         Ok(())
     }
 }
@@ -304,6 +373,13 @@ fn next_window_label(app: &AppHandle) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quit_title_follows_exit_guard_language() {
+        assert_eq!(quit_menu_title("TempoTerm", "en"), "Quit TempoTerm");
+        assert_eq!(quit_menu_title("TempoTerm", "zh-TW"), "結束 TempoTerm");
+        assert_eq!(quit_menu_title("TempoTerm", "zh-Hant"), "結束 TempoTerm");
+    }
 
     #[test]
     fn deserializes_native_menu_model() {

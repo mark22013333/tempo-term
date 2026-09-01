@@ -6,6 +6,9 @@ mod session;
 
 pub use prompt::PromptReply;
 pub use session::SshState;
+pub(crate) use session::{
+    close_owned as close_owned_sessions, owned_count as owned_session_count, session_count,
+};
 pub(crate) use client::{connect_authenticated, AuthedConnectArgs, PromptRegistryHandle};
 
 use tauri::ipc::{Channel, Response};

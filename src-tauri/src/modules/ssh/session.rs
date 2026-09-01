@@ -40,6 +40,7 @@ pub enum SshControl {
 /// The frontend-facing handle to one running session: just the sender side of
 /// its control channel. The worker thread holds the receiver.
 struct SshHandle {
+    owner_label: String,
     control: mpsc::UnboundedSender<SshControl>,
 }
 
@@ -102,7 +103,13 @@ pub fn open(
         .sessions
         .lock()
         .unwrap()
-        .insert(id, SshHandle { control: control_tx });
+        .insert(
+            id,
+            SshHandle {
+                owner_label: window_label.clone(),
+                control: control_tx,
+            },
+        );
 
     let registry = state.registry.clone();
     let app = app.clone();
@@ -511,6 +518,33 @@ fn close_inner(state: &SshState, id: u32) {
 /// remove the (now stale) entry either way so the id doesn't leak.
 pub fn close(state: &State<'_, SshState>, id: u32) {
     close_inner(state, id)
+}
+
+pub fn session_count(state: &SshState) -> usize {
+    state.sessions.lock().unwrap().len()
+}
+
+pub fn owned_count(state: &SshState, owner: &str) -> usize {
+    state
+        .sessions
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|handle| handle.owner_label == owner)
+        .count()
+}
+
+pub fn close_owned(state: &SshState, owner: &str) {
+    let ids: Vec<u32> = state
+        .sessions
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(id, handle)| (handle.owner_label == owner).then_some(*id))
+        .collect();
+    for id in ids {
+        close_inner(state, id);
+    }
 }
 
 /// Drop a session's registry entry, looked up from the app's managed `SshState`.

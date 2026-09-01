@@ -41,7 +41,7 @@ import { installStatusHook, installCodexStatusHook } from "@/modules/claude-prog
 import { installSessionNotifications } from "@/modules/claude-progress/lib/sessionNotifications";
 import { ensureNotificationPermission } from "@/modules/claude-progress/lib/notify";
 import { useWatchNotes } from "@/modules/notes/lib/useWatchNotes";
-import { registerSecondaryWindowCleanup, restoreFocusOnWindowRefocus } from "@/lib/windowLifecycle";
+import { restoreFocusOnWindowRefocus } from "@/lib/windowLifecycle";
 import { SshPromptDialog } from "@/modules/ssh/SshPromptDialog";
 import { SetupWizard } from "@/modules/setup/SetupWizard";
 import { detectTools, isToolReady } from "@/modules/setup/lib/setupTools";
@@ -293,16 +293,26 @@ function App() {
     void enforceLogRetention(30).catch(() => {});
   }, []);
 
-  // In a secondary window, close this window's PTY sessions before it is
-  // destroyed so no background shells leak. No-op in the main window.
+  // Mirror the persisted opt-out and language into Rust. Rust owns native
+  // window/app close handling, including while the WebView is unresponsive.
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    void registerSecondaryWindowCleanup()
-      .then((off) => {
-        unlisten = off;
-      })
-      .catch(() => {});
-    return () => unlisten?.();
+    const sync = () => {
+      const settings = useSettingsStore.getState();
+      void invoke("exit_guard_configure", {
+        enabled: settings.confirmCloseWithRunningTerminals,
+        language: settings.language,
+      }).catch(() => {});
+    };
+    sync();
+    return useSettingsStore.subscribe((state, previous) => {
+      if (
+        state.confirmCloseWithRunningTerminals !==
+          previous.confirmCloseWithRunningTerminals ||
+        state.language !== previous.language
+      ) {
+        sync();
+      }
+    });
   }, []);
 
   // On Windows, WebView2 drops DOM focus when the window regains focus, so
