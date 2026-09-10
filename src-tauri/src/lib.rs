@@ -415,6 +415,8 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        modules::recovery::handle_run_event(app_handle, &event);
         modules::exit_guard::handle_run_event(app_handle, &event);
     });
 }

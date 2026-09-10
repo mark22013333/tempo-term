@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 #[cfg(target_os = "macos")]
-use tauri::{WebviewWindowBuilder, Window};
+use tauri::{RunEvent, WebviewWindowBuilder, Window};
 #[cfg(target_os = "macos")]
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -278,6 +278,15 @@ impl RecoveryState {
         entry.generation
     }
 
+    #[cfg(any(target_os = "macos", test))]
+    fn is_rebuilding(&self) -> bool {
+        self.renderer_health
+            .lock()
+            .unwrap()
+            .values()
+            .any(|entry| entry.rebuilding)
+    }
+
     pub fn init_log_path(&self, path: PathBuf) {
         *self.log_path.lock().unwrap() = Some(path);
     }
@@ -312,6 +321,24 @@ impl RecoveryState {
                 timestamp_ms,
             );
         });
+    }
+}
+
+/// Destroying the sole `WebviewWindow` normally asks Tauri to exit the whole
+/// process. A same-label replacement necessarily has a short interval with no
+/// workspace window, so keep the event loop alive for that interval. This is
+/// what preserves Rust-owned PTY/SSH sessions while the native window and its
+/// root WKWebView are recreated.
+#[cfg(target_os = "macos")]
+pub fn handle_run_event(app: &AppHandle, event: &RunEvent) {
+    let RunEvent::ExitRequested { api, .. } = event else {
+        return;
+    };
+    if app
+        .try_state::<RecoveryState>()
+        .is_some_and(|state| state.is_rebuilding())
+    {
+        api.prevent_exit();
     }
 }
 
@@ -968,5 +995,18 @@ mod tests {
             state.watchdog_actions(22_000),
             vec![WatchdogAction::Probe("main".into())]
         );
+    }
+
+    #[test]
+    fn in_flight_rebuild_keeps_the_process_alive_until_finished() {
+        let state = RecoveryState::new();
+        assert!(!state.is_rebuilding());
+        assert_eq!(
+            state.begin_rebuild("main", false, 1_000),
+            BeginRebuild::Started(1)
+        );
+        assert!(state.is_rebuilding());
+        state.finish_rebuild("main", true, 2_000);
+        assert!(!state.is_rebuilding());
     }
 }
