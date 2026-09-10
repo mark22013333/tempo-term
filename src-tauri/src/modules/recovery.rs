@@ -31,8 +31,11 @@ const MAX_WINDOW_BYTES: usize = 32 * 1024 * 1024;
 const REBUILD_WINDOW_MS: u64 = 120_000;
 #[cfg(any(target_os = "macos", test))]
 const REBUILD_LIMIT: usize = 3;
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 const HEARTBEAT_STALE_MS: u64 = 20_000;
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 const HEARTBEAT_PROBE_GRACE_MS: u64 = 3_000;
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 const WATCHDOG_SLEEP_GAP_MS: u64 = 8_000;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -68,6 +71,7 @@ pub struct RecoveryState {
     #[cfg(any(target_os = "macos", test))]
     recent_rebuilds: Mutex<HashMap<String, VecDeque<u64>>>,
     renderer_health: Mutex<HashMap<String, RendererHealth>>,
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     watchdog_last_tick_ms: Mutex<u64>,
     #[cfg(any(target_os = "macos", test))]
     log_write_lock: Arc<Mutex<()>>,
@@ -80,15 +84,18 @@ struct RendererHealth {
     generation: u64,
     probe_started_ms: Option<u64>,
     rebuilding: bool,
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     paused: bool,
 }
 
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 #[derive(Debug, PartialEq, Eq)]
 enum WatchdogAction {
     Probe(String),
     Rebuild(String),
 }
 
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 #[derive(Debug, PartialEq, Eq)]
 enum BeginRebuild {
     Started(usize),
@@ -170,6 +177,7 @@ impl RecoveryState {
         entry.generation
     }
 
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     fn watchdog_actions(&self, now: u64) -> Vec<WatchdogAction> {
         let mut last_tick = self.watchdog_last_tick_ms.lock().unwrap();
         let woke_from_sleep = now.saturating_sub(*last_tick) > WATCHDOG_SLEEP_GAP_MS;
@@ -244,6 +252,7 @@ impl RecoveryState {
         BeginRebuild::Started(attempt)
     }
 
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     fn finish_rebuild(&self, window_label: &str, success: bool, now: u64) -> u64 {
         let mut health = self.renderer_health.lock().unwrap();
         let entry = health
@@ -471,6 +480,7 @@ pub fn recovery_dismiss_notice(window: WebviewWindow, state: State<'_, RecoveryS
 
 /// Close native preview children owned by `window_label`. They otherwise float
 /// above a reloading main renderer and can make recovery appear to have failed.
+#[cfg(target_os = "macos")]
 pub fn close_owned_previews(app: &AppHandle, window_label: &str) {
     let prefix = format!("preview-{window_label}-");
     for (label, webview) in app.webviews() {
