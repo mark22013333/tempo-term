@@ -623,8 +623,10 @@ fn rebuild_webview(app: &AppHandle, window_label: &str) -> Result<(), String> {
     config.y = Some(position.y);
     config.width = size.width;
     config.height = size.height;
-    config.visible = was_visible;
-    config.focus = was_focused;
+    // Build the replacement hidden and restore presentation only after the
+    // terminated native surface is confirmed out of the window stack.
+    config.visible = false;
+    config.focus = false;
     config.maximized = was_maximized;
     config.fullscreen = was_fullscreen;
     close_owned_previews(app, window_label);
@@ -635,6 +637,13 @@ fn rebuild_webview(app: &AppHandle, window_label: &str) -> Result<(), String> {
     // replacement. Capture visibility and focus above so the replacement still
     // restores the user's original window state.
     window.hide().map_err(|error| error.to_string())?;
+    let hide_deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while window.is_visible().unwrap_or(false) {
+        if std::time::Instant::now() >= hide_deadline {
+            return Err(format!("window {window_label} hide timed out"));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
     window.destroy().map_err(|error| error.to_string())?;
     // destroy() is queued onto AppKit's event loop. Wait until Tauri removes
     // both registrations before reusing the same label, otherwise the builder
