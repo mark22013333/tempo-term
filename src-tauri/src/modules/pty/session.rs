@@ -46,7 +46,8 @@ struct OutputHubInner {
     exit_code: Option<i32>,
     start_seq: u64,
     next_seq: u64,
-    active: bool,
+    window_active: bool,
+    pane_visible: bool,
 }
 
 /// Renderer-independent PTY output. A WKWebView can be suspended or replaced
@@ -56,7 +57,7 @@ struct OutputHubInner {
 struct OutputHub(Mutex<OutputHubInner>);
 
 impl OutputHub {
-    fn new(data: Channel<Response>, exit: Channel<i32>) -> Self {
+    fn new(data: Channel<Response>, exit: Channel<i32>, pane_visible: bool) -> Self {
         Self(Mutex::new(OutputHubInner {
             backlog: VecDeque::new(),
             truncated: false,
@@ -69,7 +70,8 @@ impl OutputHub {
             exit_code: None,
             start_seq: 0,
             next_seq: 0,
-            active: true,
+            window_active: true,
+            pane_visible,
         }))
     }
 
@@ -82,7 +84,7 @@ impl OutputHub {
             inner.start_seq = inner.start_seq.saturating_add(1);
             inner.truncated = true;
         }
-        if inner.active {
+        if inner.window_active && inner.pane_visible {
             let next = inner.next_seq;
             if let Some(sink) = inner.sink.as_mut() {
                 if sink.data.send(Response::new(bytes)).is_err() {
@@ -104,7 +106,7 @@ impl OutputHub {
 
     fn attach(&self, data: Channel<Response>, exit: Channel<i32>) {
         let mut inner = self.0.lock().unwrap();
-        if !inner.active {
+        if !(inner.window_active && inner.pane_visible) {
             let cursor = inner.start_seq;
             let needs_truncation_notice = inner.truncated;
             inner.sink = Some(OutputSink {
@@ -141,15 +143,33 @@ impl OutputHub {
         }
     }
 
-    fn set_active(&self, active: bool) {
+    fn set_window_active(&self, active: bool) {
         let mut inner = self.0.lock().unwrap();
-        if inner.active == active {
+        if inner.window_active == active {
             return;
         }
-        inner.active = active;
-        if !active {
+        let was_active = inner.window_active && inner.pane_visible;
+        inner.window_active = active;
+        if was_active || !(inner.window_active && inner.pane_visible) {
             return;
         }
+        Self::flush_pending(&mut inner);
+    }
+
+    fn set_pane_visible(&self, visible: bool) {
+        let mut inner = self.0.lock().unwrap();
+        if inner.pane_visible == visible {
+            return;
+        }
+        let was_active = inner.window_active && inner.pane_visible;
+        inner.pane_visible = visible;
+        if was_active || !(inner.window_active && inner.pane_visible) {
+            return;
+        }
+        Self::flush_pending(&mut inner);
+    }
+
+    fn flush_pending(inner: &mut OutputHubInner) {
         let start_seq = inner.start_seq;
         let next_seq = inner.next_seq;
         let backlog: Vec<u8> = inner.backlog.iter().copied().collect();
@@ -455,6 +475,7 @@ pub fn spawn(
     shell_override: Option<String>,
     app: &tauri::AppHandle,
     owner_label: String,
+    pane_visible: bool,
     on_data: Channel<Response>,
     on_exit: Channel<i32>,
 ) -> Result<u32, String> {
@@ -479,7 +500,7 @@ pub fn spawn(
         .ok()
         .map(|h| h.tx);
 
-    let hub = Arc::new(OutputHub::new(on_data, on_exit));
+    let hub = Arc::new(OutputHub::new(on_data, on_exit, pane_visible));
     let output_hub = Arc::clone(&hub);
     let exit_hub = Arc::clone(&hub);
     spawn_with_sinks(
@@ -509,6 +530,7 @@ pub fn attach(
     state: &PtyState,
     id: u32,
     owner_label: &str,
+    pane_visible: bool,
     on_data: Channel<Response>,
     on_exit: Channel<i32>,
 ) -> Result<(), String> {
@@ -522,6 +544,7 @@ pub fn attach(
         .unwrap()
         .clone()
         .ok_or_else(|| "pty session is not attachable".to_string())?;
+    hub.set_pane_visible(pane_visible);
     hub.attach(on_data, on_exit);
     Ok(())
 }
@@ -531,10 +554,30 @@ pub fn set_window_active(state: &PtyState, owner_label: &str, active: bool) {
     for session in sessions {
         if session.owner_label.lock().unwrap().as_deref() == Some(owner_label) {
             if let Some(hub) = session.output.lock().unwrap().clone() {
-                hub.set_active(active);
+                hub.set_window_active(active);
             }
         }
     }
+}
+
+pub fn set_session_active(
+    state: &PtyState,
+    id: u32,
+    owner_label: &str,
+    active: bool,
+) -> Result<(), String> {
+    let session = state.get(id)?;
+    if session.owner_label.lock().unwrap().as_deref() != Some(owner_label) {
+        return Err("pty session belongs to another window".to_string());
+    }
+    let hub = session
+        .output
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "pty session is not attachable".to_string())?;
+    hub.set_pane_visible(active);
+    Ok(())
 }
 
 pub fn recovery_stats(state: &PtyState, owner_label: &str) -> (usize, bool) {
@@ -821,20 +864,20 @@ mod tests {
     #[test]
     fn output_hub_mutes_background_ipc_and_flushes_in_order() {
         let (data, exit, messages) = test_channels();
-        let hub = OutputHub::new(data, exit);
+        let hub = OutputHub::new(data, exit, true);
         hub.publish(b"before".to_vec());
-        hub.set_active(false);
+        hub.set_window_active(false);
         hub.publish(b"during-1".to_vec());
         hub.publish(b"during-2".to_vec());
         assert_eq!(messages.lock().unwrap().concat(), b"before");
-        hub.set_active(true);
+        hub.set_window_active(true);
         assert_eq!(messages.lock().unwrap().concat(), b"beforeduring-1during-2");
     }
 
     #[test]
     fn output_hub_attach_replaces_sink_and_replays_backlog() {
         let (first_data, first_exit, first) = test_channels();
-        let hub = OutputHub::new(first_data, first_exit);
+        let hub = OutputHub::new(first_data, first_exit, true);
         hub.publish(b"one".to_vec());
         let (second_data, second_exit, second) = test_channels();
         hub.attach(second_data, second_exit);
@@ -846,7 +889,7 @@ mod tests {
     #[test]
     fn output_hub_backlog_is_bounded_and_marks_truncation() {
         let (data, exit, _) = test_channels();
-        let hub = OutputHub::new(data, exit);
+        let hub = OutputHub::new(data, exit, true);
         hub.publish(vec![b'x'; OUTPUT_BACKLOG_CAP + 17]);
         let inner = hub.0.lock().unwrap();
         assert_eq!(inner.backlog.len(), OUTPUT_BACKLOG_CAP);
@@ -857,15 +900,30 @@ mod tests {
     #[test]
     fn hidden_attach_preserves_truncation_notice_until_activation() {
         let (data, exit, _) = test_channels();
-        let hub = OutputHub::new(data, exit);
-        hub.set_active(false);
+        let hub = OutputHub::new(data, exit, false);
         hub.publish(vec![b'x'; OUTPUT_BACKLOG_CAP + 1]);
         let (attached_data, attached_exit, attached) = test_channels();
         hub.attach(attached_data, attached_exit);
         assert!(attached.lock().unwrap().is_empty());
-        hub.set_active(true);
+        hub.set_pane_visible(true);
         let output = attached.lock().unwrap().concat();
         assert!(String::from_utf8_lossy(&output).contains("background output was truncated"));
+    }
+
+    #[test]
+    fn output_hub_requires_both_window_and_pane_visibility() {
+        let (data, exit, messages) = test_channels();
+        let hub = OutputHub::new(data, exit, false);
+        hub.publish(b"hidden-pane".to_vec());
+        hub.set_window_active(false);
+        hub.set_pane_visible(true);
+        hub.publish(b"hidden-window".to_vec());
+        assert!(messages.lock().unwrap().is_empty());
+        hub.set_window_active(true);
+        assert_eq!(
+            messages.lock().unwrap().concat(),
+            b"hidden-panehidden-window"
+        );
     }
     use std::sync::mpsc;
     use std::time::Duration;

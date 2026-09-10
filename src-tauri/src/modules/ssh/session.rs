@@ -60,12 +60,13 @@ struct SshOutputInner {
     start: u64,
     next: u64,
     truncated: bool,
-    active: bool,
+    window_active: bool,
+    pane_visible: bool,
 }
 struct SshOutputHub(Mutex<SshOutputInner>);
 
 impl SshOutputHub {
-    fn new(data: Channel<Response>, exit: Channel<i32>) -> Self {
+    fn new(data: Channel<Response>, exit: Channel<i32>, pane_visible: bool) -> Self {
         Self(Mutex::new(SshOutputInner {
             backlog: VecDeque::new(),
             sink: Some(SshSink {
@@ -77,7 +78,8 @@ impl SshOutputHub {
             start: 0,
             next: 0,
             truncated: false,
-            active: true,
+            window_active: true,
+            pane_visible,
         }))
     }
     fn publish(&self, bytes: Vec<u8>) {
@@ -89,7 +91,7 @@ impl SshOutputHub {
             inner.start += 1;
             inner.truncated = true;
         }
-        if inner.active {
+        if inner.window_active && inner.pane_visible {
             let next = inner.next;
             if let Some(sink) = inner.sink.as_mut() {
                 if sink.data.send(Response::new(bytes)).is_err() {
@@ -107,7 +109,7 @@ impl SshOutputHub {
     }
     fn attach(&self, data: Channel<Response>, exit: Channel<i32>) {
         let mut inner = self.0.lock().unwrap();
-        if !inner.active {
+        if !(inner.window_active && inner.pane_visible) {
             let cursor = inner.start;
             let needs_truncation_notice = inner.truncated;
             inner.sink = Some(SshSink {
@@ -139,15 +141,33 @@ impl SshOutputHub {
             needs_truncation_notice: false,
         });
     }
-    fn set_active(&self, active: bool) {
+    fn set_window_active(&self, active: bool) {
         let mut inner = self.0.lock().unwrap();
-        if inner.active == active {
+        if inner.window_active == active {
             return;
         }
-        inner.active = active;
-        if !active {
+        let was_active = inner.window_active && inner.pane_visible;
+        inner.window_active = active;
+        if was_active || !(inner.window_active && inner.pane_visible) {
             return;
         }
+        Self::flush_pending(&mut inner);
+    }
+
+    fn set_pane_visible(&self, visible: bool) {
+        let mut inner = self.0.lock().unwrap();
+        if inner.pane_visible == visible {
+            return;
+        }
+        let was_active = inner.window_active && inner.pane_visible;
+        inner.pane_visible = visible;
+        if was_active || !(inner.window_active && inner.pane_visible) {
+            return;
+        }
+        Self::flush_pending(&mut inner);
+    }
+
+    fn flush_pending(inner: &mut SshOutputInner) {
         let start = inner.start;
         let next = inner.next;
         let backlog: Vec<u8> = inner.backlog.iter().copied().collect();
@@ -226,7 +246,7 @@ pub fn open(
 ) -> Result<u32, String> {
     let id = state.alloc_id();
     let (control_tx, control_rx) = mpsc::unbounded_channel::<SshControl>();
-    let output = Arc::new(SshOutputHub::new(on_data, on_exit));
+    let output = Arc::new(SshOutputHub::new(on_data, on_exit, req.active));
 
     // Register the handle before spawning so a write/resize/close that races in
     // right after `open` returns can find the session. Don't hold the lock
@@ -622,6 +642,7 @@ pub fn attach(
     state: &SshState,
     id: u32,
     owner: &str,
+    active: bool,
     data: Channel<Response>,
     exit: Channel<i32>,
 ) -> Result<(), String> {
@@ -632,6 +653,7 @@ pub fn attach(
     if handle.owner_label != owner {
         return Err("ssh session belongs to another window".into());
     }
+    handle.output.set_pane_visible(active);
     handle.output.attach(data, exit);
     Ok(())
 }
@@ -646,8 +668,25 @@ pub fn set_window_active(state: &SshState, owner: &str, active: bool) {
         .map(|handle| handle.output.clone())
         .collect();
     for hub in hubs {
-        hub.set_active(active);
+        hub.set_window_active(active);
     }
+}
+
+pub fn set_session_active(
+    state: &SshState,
+    id: u32,
+    owner_label: &str,
+    active: bool,
+) -> Result<(), String> {
+    let sessions = state.sessions.lock().unwrap();
+    let handle = sessions
+        .get(&id)
+        .ok_or_else(|| format!("ssh session {id} not found"))?;
+    if handle.owner_label != owner_label {
+        return Err("ssh session belongs to another window".to_string());
+    }
+    handle.output.set_pane_visible(active);
+    Ok(())
 }
 
 pub fn recovery_stats(state: &SshState, owner: &str) -> (usize, bool) {
@@ -779,20 +818,20 @@ mod tests {
     #[test]
     fn ssh_output_hub_mutes_background_ipc_and_flushes_in_order() {
         let (data, exit, messages) = test_channels();
-        let hub = SshOutputHub::new(data, exit);
+        let hub = SshOutputHub::new(data, exit, true);
         hub.publish(b"before".to_vec());
-        hub.set_active(false);
+        hub.set_window_active(false);
         hub.publish(b"during-1".to_vec());
         hub.publish(b"during-2".to_vec());
         assert_eq!(messages.lock().unwrap().concat(), b"before");
-        hub.set_active(true);
+        hub.set_window_active(true);
         assert_eq!(messages.lock().unwrap().concat(), b"beforeduring-1during-2");
     }
 
     #[test]
     fn ssh_output_hub_attach_replaces_sink_and_replays_backlog() {
         let (first_data, first_exit, first) = test_channels();
-        let hub = SshOutputHub::new(first_data, first_exit);
+        let hub = SshOutputHub::new(first_data, first_exit, true);
         hub.publish(b"one".to_vec());
         let (second_data, second_exit, second) = test_channels();
         hub.attach(second_data, second_exit);
@@ -804,7 +843,7 @@ mod tests {
     #[test]
     fn ssh_output_hub_backlog_is_bounded_and_marks_truncation() {
         let (data, exit, _) = test_channels();
-        let hub = SshOutputHub::new(data, exit);
+        let hub = SshOutputHub::new(data, exit, true);
         hub.publish(vec![b'x'; BACKLOG_CAP + 17]);
         let inner = hub.0.lock().unwrap();
         assert_eq!(inner.backlog.len(), BACKLOG_CAP);
@@ -815,15 +854,30 @@ mod tests {
     #[test]
     fn hidden_ssh_attach_preserves_truncation_notice_until_activation() {
         let (data, exit, _) = test_channels();
-        let hub = SshOutputHub::new(data, exit);
-        hub.set_active(false);
+        let hub = SshOutputHub::new(data, exit, false);
         hub.publish(vec![b'x'; BACKLOG_CAP + 1]);
         let (attached_data, attached_exit, attached) = test_channels();
         hub.attach(attached_data, attached_exit);
         assert!(attached.lock().unwrap().is_empty());
-        hub.set_active(true);
+        hub.set_pane_visible(true);
         let output = attached.lock().unwrap().concat();
         assert!(String::from_utf8_lossy(&output).contains("background SSH output was truncated"));
+    }
+
+    #[test]
+    fn ssh_output_hub_requires_both_window_and_pane_visibility() {
+        let (data, exit, messages) = test_channels();
+        let hub = SshOutputHub::new(data, exit, false);
+        hub.publish(b"hidden-pane".to_vec());
+        hub.set_window_active(false);
+        hub.set_pane_visible(true);
+        hub.publish(b"hidden-window".to_vec());
+        assert!(messages.lock().unwrap().is_empty());
+        hub.set_window_active(true);
+        assert_eq!(
+            messages.lock().unwrap().concat(),
+            b"hidden-panehidden-window"
+        );
     }
 
     #[test]
