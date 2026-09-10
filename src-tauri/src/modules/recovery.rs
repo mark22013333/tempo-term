@@ -629,6 +629,12 @@ fn rebuild_webview(app: &AppHandle, window_label: &str) -> Result<(), String> {
     config.fullscreen = was_fullscreen;
     close_owned_previews(app, window_label);
 
+    // After a WebContent crash AppKit can keep the terminated NSWindow's last
+    // surface on screen even after Tauri removes its registrations. Hide that
+    // surface before destroy so it cannot occlude the healthy same-position
+    // replacement. Capture visibility and focus above so the replacement still
+    // restores the user's original window state.
+    window.hide().map_err(|error| error.to_string())?;
     window.destroy().map_err(|error| error.to_string())?;
     // destroy() is queued onto AppKit's event loop. Wait until Tauri removes
     // both registrations before reusing the same label, otherwise the builder
@@ -704,14 +710,6 @@ pub fn schedule_rebuild(
         now,
     );
     std::thread::spawn(move || {
-        // WebKit is still unwinding the termination callback when this worker
-        // starts. Destroying and recreating the root WKWebView before that
-        // callback returns can produce a native window whose new renderer
-        // never navigates. Manual and watchdog rebuilds do not need this
-        // callback-settling interval.
-        if reason == "web-content-terminated" {
-            std::thread::sleep(Duration::from_millis(500));
-        }
         let started = timestamp_ms();
         let result = rebuild_webview(&app, &window_label);
         let finished = timestamp_ms();
