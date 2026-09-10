@@ -121,12 +121,12 @@ impl SshOutputHub {
             return;
         }
         let mut replay = Vec::new();
+        replay.extend(inner.backlog.iter().copied());
         if inner.truncated {
             replay.extend_from_slice(
                 b"\r\n\x1b[33m[TempoTerm: earlier SSH output was truncated]\x1b[0m\r\n",
             );
         }
-        replay.extend(inner.backlog.iter().copied());
         for chunk in replay.chunks(SEND_CHUNK) {
             if data.send(Response::new(chunk.to_vec())).is_err() {
                 inner.sink = None;
@@ -174,12 +174,12 @@ impl SshOutputHub {
         if let Some(sink) = inner.sink.as_mut() {
             let offset = sink.cursor.max(start).saturating_sub(start) as usize;
             let mut pending = Vec::new();
+            pending.extend_from_slice(&backlog[offset.min(backlog.len())..]);
             if sink.needs_truncation_notice || sink.cursor < start {
                 pending.extend_from_slice(
                     b"\r\n\x1b[33m[TempoTerm: background SSH output was truncated]\x1b[0m\r\n",
                 );
             }
-            pending.extend_from_slice(&backlog[offset.min(backlog.len())..]);
             for chunk in pending.chunks(SEND_CHUNK) {
                 if sink.data.send(Response::new(chunk.to_vec())).is_err() {
                     inner.sink = None;
@@ -861,7 +861,8 @@ mod tests {
         assert!(attached.lock().unwrap().is_empty());
         hub.set_pane_visible(true);
         let output = attached.lock().unwrap().concat();
-        assert!(String::from_utf8_lossy(&output).contains("background SSH output was truncated"));
+        assert!(output
+            .ends_with(b"\r\n\x1b[33m[TempoTerm: background SSH output was truncated]\x1b[0m\r\n"));
     }
 
     #[test]

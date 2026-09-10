@@ -118,12 +118,12 @@ impl OutputHub {
             return;
         }
         let mut replay = Vec::with_capacity(inner.backlog.len() + 96);
+        replay.extend(inner.backlog.iter().copied());
         if inner.truncated {
             replay.extend_from_slice(
                 b"\r\n\x1b[33m[TempoTerm: earlier recovery output was truncated]\x1b[0m\r\n",
             );
         }
-        replay.extend(inner.backlog.iter().copied());
         for chunk in replay.chunks(OUTPUT_SEND_CHUNK) {
             if data.send(Response::new(chunk.to_vec())).is_err() {
                 inner.sink = None;
@@ -177,12 +177,12 @@ impl OutputHub {
             let was_truncated = sink.needs_truncation_notice || sink.cursor < start_seq;
             let offset = sink.cursor.max(start_seq).saturating_sub(start_seq) as usize;
             let mut pending = Vec::new();
+            pending.extend_from_slice(&backlog[offset.min(backlog.len())..]);
             if was_truncated {
                 pending.extend_from_slice(
                     b"\r\n\x1b[33m[TempoTerm: background output was truncated]\x1b[0m\r\n",
                 );
             }
-            pending.extend_from_slice(&backlog[offset.min(backlog.len())..]);
             for chunk in pending.chunks(OUTPUT_SEND_CHUNK) {
                 if sink.data.send(Response::new(chunk.to_vec())).is_err() {
                     inner.sink = None;
@@ -907,7 +907,8 @@ mod tests {
         assert!(attached.lock().unwrap().is_empty());
         hub.set_pane_visible(true);
         let output = attached.lock().unwrap().concat();
-        assert!(String::from_utf8_lossy(&output).contains("background output was truncated"));
+        assert!(output
+            .ends_with(b"\r\n\x1b[33m[TempoTerm: background output was truncated]\x1b[0m\r\n"));
     }
 
     #[test]
