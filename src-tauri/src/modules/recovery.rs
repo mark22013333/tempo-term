@@ -574,18 +574,27 @@ fn rebuild_webview(app: &AppHandle, window_label: &str) -> Result<(), String> {
         .cloned()
         .ok_or_else(|| "main window configuration not found".to_string())?;
     config.label = window_label.to_string();
+    // A child created from a window config does not inherit the current native
+    // window's visibility. Be explicit: recovery must never report success
+    // while leaving a correctly loaded replacement hidden behind the window's
+    // background colour.
+    config.visible = true;
     close_owned_previews(app, window_label);
     if let Some(webview) = app.get_webview(window_label) {
         webview.close().map_err(|error| error.to_string())?;
     }
-    window
+    let replacement = window
         .add_child(
             WebviewBuilder::from_config(&config).auto_resize(),
             LogicalPosition::new(0, 0),
             size,
         )
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    replacement.show().map_err(|error| error.to_string())?;
+    replacement
+        .set_focus()
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// Coalesces concurrent recovery requests and performs WebView creation away
