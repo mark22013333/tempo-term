@@ -3,7 +3,7 @@
 //! Terminal processes live in Rust, so a renderer reload must not be treated as
 //! an application restart. This module keeps the small amount of volatile UI
 //! state that cannot safely be written to disk (notably dirty editor buffers),
-//! records privacy-preserving incidents, and reloads one workspace WebView.
+//! records privacy-preserving incidents, and recreates one workspace window.
 
 use std::collections::HashMap;
 #[cfg(any(target_os = "macos", test))]
@@ -19,9 +19,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "macos")]
 use tauri::Emitter;
-#[cfg(target_os = "macos")]
-use tauri::{webview::WebviewBuilder, LogicalPosition, Window};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
+#[cfg(target_os = "macos")]
+use tauri::{WebviewWindowBuilder, Window};
 #[cfg(target_os = "macos")]
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -562,10 +562,27 @@ fn prompt_rebuild_failure(window: &Window) -> bool {
 
 #[cfg(target_os = "macos")]
 fn rebuild_webview(app: &AppHandle, window_label: &str) -> Result<(), String> {
+    // Tauri's startup window is a WebviewWindow: its root WKWebView owns the
+    // native content view. Closing only that root and adding a child can leave
+    // an empty NSWindow even though add_child returned Ok. Rebuild the paired
+    // WebviewWindow instead; destroy() emits no CloseRequested event, so the
+    // Rust-owned PTY/SSH sessions are deliberately left untouched.
     let window = app
-        .get_window(window_label)
-        .ok_or_else(|| format!("window {window_label} not found"))?;
-    let size = window.inner_size().map_err(|error| error.to_string())?;
+        .get_webview_window(window_label)
+        .ok_or_else(|| format!("webview window {window_label} not found"))?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let position = window
+        .outer_position()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale);
+    let size = window
+        .inner_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale);
+    let was_visible = window.is_visible().unwrap_or(true);
+    let was_focused = window.is_focused().unwrap_or(true);
+    let was_maximized = window.is_maximized().unwrap_or(false);
+    let was_fullscreen = window.is_fullscreen().unwrap_or(false);
     let mut config = app
         .config()
         .app
@@ -574,26 +591,39 @@ fn rebuild_webview(app: &AppHandle, window_label: &str) -> Result<(), String> {
         .cloned()
         .ok_or_else(|| "main window configuration not found".to_string())?;
     config.label = window_label.to_string();
-    // A child created from a window config does not inherit the current native
-    // window's visibility. Be explicit: recovery must never report success
-    // while leaving a correctly loaded replacement hidden behind the window's
-    // background colour.
-    config.visible = true;
+    config.center = false;
+    config.x = Some(position.x);
+    config.y = Some(position.y);
+    config.width = size.width;
+    config.height = size.height;
+    config.visible = was_visible;
+    config.focus = was_focused;
+    config.maximized = was_maximized;
+    config.fullscreen = was_fullscreen;
     close_owned_previews(app, window_label);
-    if let Some(webview) = app.get_webview(window_label) {
-        webview.close().map_err(|error| error.to_string())?;
+
+    window.destroy().map_err(|error| error.to_string())?;
+    // destroy() is queued onto AppKit's event loop. Wait until Tauri removes
+    // both registrations before reusing the same label, otherwise the builder
+    // can race with teardown and fail with LabelAlreadyExists.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while app.get_window(window_label).is_some() || app.get_webview(window_label).is_some() {
+        if std::time::Instant::now() >= deadline {
+            return Err(format!("window {window_label} teardown timed out"));
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
-    let replacement = window
-        .add_child(
-            WebviewBuilder::from_config(&config).auto_resize(),
-            LogicalPosition::new(0, 0),
-            size,
-        )
+
+    let replacement = WebviewWindowBuilder::from_config(app, &config)
+        .map_err(|error| error.to_string())?
+        .build()
         .map_err(|error| error.to_string())?;
-    replacement.show().map_err(|error| error.to_string())?;
-    replacement
-        .set_focus()
-        .map_err(|error| error.to_string())?;
+    if was_visible {
+        replacement.show().map_err(|error| error.to_string())?;
+    }
+    if was_focused {
+        replacement.set_focus().map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
