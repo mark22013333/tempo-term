@@ -138,8 +138,8 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.on_web_content_process_terminate(|webview| {
         // Installing a custom handler replaces Tauri's default auto-reload.
-        // Preview children are isolated; a main renderer is replaced with a
-        // fresh same-label child WebView while the native window stays alive.
+        // Preview children are isolated; a main renderer is replaced by the
+        // shared same-label workspace reconstruction path.
         if webview.label().starts_with("preview-") {
             let _ = webview.reload();
             return;

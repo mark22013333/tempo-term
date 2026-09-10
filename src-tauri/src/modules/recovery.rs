@@ -704,6 +704,14 @@ pub fn schedule_rebuild(
         now,
     );
     std::thread::spawn(move || {
+        // WebKit is still unwinding the termination callback when this worker
+        // starts. Destroying and recreating the root WKWebView before that
+        // callback returns can produce a native window whose new renderer
+        // never navigates. Manual and watchdog rebuilds do not need this
+        // callback-settling interval.
+        if reason == "web-content-terminated" {
+            std::thread::sleep(Duration::from_millis(500));
+        }
         let started = timestamp_ms();
         let result = rebuild_webview(&app, &window_label);
         let finished = timestamp_ms();
