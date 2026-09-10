@@ -50,12 +50,12 @@ jobs:
       - name: Build unsigned test app
         run: >-
           pnpm tauri build --debug --bundles app --no-sign --ci
-          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          --config '{"productName":"TempoTerm Recovery Test","identifier":"com.tempoterm.desktop.recovery-test","bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Package test app
         run: >-
           ditto -c -k --sequesterRsrc --keepParent
-          "src-tauri/target/debug/bundle/macos/TempoTerm.app"
+          "src-tauri/target/debug/bundle/macos/TempoTerm Recovery Test.app"
           "TempoTerm-recovery-test.zip"
 
       - name: Upload test app
