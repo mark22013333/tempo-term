@@ -9,7 +9,7 @@ use std::collections::HashMap;
 #[cfg(any(target_os = "macos", test))]
 use std::collections::VecDeque;
 use std::path::PathBuf;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(target_os = "macos")]
@@ -73,7 +73,7 @@ pub struct RecoveryState {
     renderer_health: Mutex<HashMap<String, RendererHealth>>,
     #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     watchdog_last_tick_ms: Mutex<u64>,
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(target_os = "macos")]
     log_write_lock: Arc<Mutex<()>>,
 }
 
@@ -116,12 +116,12 @@ impl RecoveryState {
             recent_rebuilds: Mutex::new(HashMap::new()),
             renderer_health: Mutex::new(HashMap::new()),
             watchdog_last_tick_ms: Mutex::new(now),
-            #[cfg(any(target_os = "macos", test))]
+            #[cfg(target_os = "macos")]
             log_write_lock: Arc::new(Mutex::new(())),
         }
     }
 
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(target_os = "macos")]
     fn record_incident(&self, window_label: &str, reason: &str, now: u64) {
         let notice = RecoveryNotice {
             incident_id: format!("{}-{now}", std::process::id()),
@@ -282,7 +282,7 @@ impl RecoveryState {
         *self.log_path.lock().unwrap() = Some(path);
     }
 
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(target_os = "macos")]
     fn write_incident_log(
         &self,
         window_label: String,
