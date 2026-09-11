@@ -57,6 +57,7 @@ struct SshSink {
 struct SshOutputInner {
     backlog: VecDeque<u8>,
     sink: Option<SshSink>,
+    exit_code: Option<i32>,
     start: u64,
     next: u64,
     truncated: bool,
@@ -75,6 +76,7 @@ impl SshOutputHub {
                 cursor: 0,
                 needs_truncation_notice: false,
             }),
+            exit_code: None,
             start: 0,
             next: 0,
             truncated: false,
@@ -103,7 +105,9 @@ impl SshOutputHub {
         }
     }
     fn finish(&self, code: i32) {
-        if let Some(sink) = self.0.lock().unwrap().sink.take() {
+        let mut inner = self.0.lock().unwrap();
+        inner.exit_code = Some(code);
+        if let Some(sink) = inner.sink.take() {
             let _ = sink.exit.send(code);
         }
     }
@@ -133,13 +137,17 @@ impl SshOutputHub {
                 return;
             }
         }
-        let cursor = inner.next;
-        inner.sink = Some(SshSink {
-            data,
-            exit,
-            cursor,
-            needs_truncation_notice: false,
-        });
+        if let Some(code) = inner.exit_code {
+            let _ = exit.send(code);
+        } else {
+            let cursor = inner.next;
+            inner.sink = Some(SshSink {
+                data,
+                exit,
+                cursor,
+                needs_truncation_notice: false,
+            });
+        }
     }
     fn set_window_active(&self, active: bool) {
         let mut inner = self.0.lock().unwrap();
@@ -171,7 +179,7 @@ impl SshOutputHub {
         let start = inner.start;
         let next = inner.next;
         let backlog: Vec<u8> = inner.backlog.iter().copied().collect();
-        if let Some(sink) = inner.sink.as_mut() {
+        if let Some(mut sink) = inner.sink.take() {
             let offset = sink.cursor.max(start).saturating_sub(start) as usize;
             let mut pending = Vec::new();
             pending.extend_from_slice(&backlog[offset.min(backlog.len())..]);
@@ -182,12 +190,16 @@ impl SshOutputHub {
             }
             for chunk in pending.chunks(SEND_CHUNK) {
                 if sink.data.send(Response::new(chunk.to_vec())).is_err() {
-                    inner.sink = None;
                     return;
                 }
             }
             sink.cursor = next;
             sink.needs_truncation_notice = false;
+            if let Some(code) = inner.exit_code {
+                let _ = sink.exit.send(code);
+            } else {
+                inner.sink = Some(sink);
+            }
         }
     }
     fn is_truncated(&self) -> bool {
@@ -815,6 +827,21 @@ mod tests {
         (data, exit, messages)
     }
 
+    fn capturing_exit_channel() -> (Channel<i32>, Arc<Mutex<Vec<i32>>>) {
+        let codes = Arc::new(Mutex::new(Vec::new()));
+        let captured = codes.clone();
+        let exit = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(value) = body {
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::from_str(&value).unwrap());
+            }
+            Ok(())
+        });
+        (exit, codes)
+    }
+
     #[test]
     fn ssh_output_hub_mutes_background_ipc_and_flushes_in_order() {
         let (data, exit, messages) = test_channels();
@@ -863,6 +890,37 @@ mod tests {
         let output = attached.lock().unwrap().concat();
         assert!(output
             .ends_with(b"\r\n\x1b[33m[TempoTerm: background SSH output was truncated]\x1b[0m\r\n"));
+    }
+
+    #[test]
+    fn ssh_finish_after_sink_failure_replays_exit_on_attach() {
+        let failed_data =
+            Channel::new(|_| Err(tauri::Error::AssetNotFound("stale sink".into())));
+        let exit = Channel::new(|_| Ok(()));
+        let hub = SshOutputHub::new(failed_data, exit, true);
+        hub.publish(b"before-exit".to_vec());
+        hub.finish(42);
+
+        let (attached_data, _, attached) = test_channels();
+        let (attached_exit, exits) = capturing_exit_channel();
+        hub.attach(attached_data, attached_exit);
+        assert_eq!(attached.lock().unwrap().concat(), b"before-exit");
+        assert_eq!(*exits.lock().unwrap(), vec![42]);
+    }
+
+    #[test]
+    fn hidden_ssh_attach_replays_exit_on_activation() {
+        let (data, exit, _) = test_channels();
+        let hub = SshOutputHub::new(data, exit, false);
+        hub.finish(17);
+
+        let (attached_data, _, _) = test_channels();
+        let (attached_exit, exits) = capturing_exit_channel();
+        hub.attach(attached_data, attached_exit);
+        assert!(exits.lock().unwrap().is_empty());
+
+        hub.set_pane_visible(true);
+        assert_eq!(*exits.lock().unwrap(), vec![17]);
     }
 
     #[test]
