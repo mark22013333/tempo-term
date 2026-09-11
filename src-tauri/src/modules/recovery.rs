@@ -104,6 +104,22 @@ enum BeginRebuild {
     Paused,
 }
 
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, PartialEq, Eq)]
+enum RebuildFailureAction {
+    Prompt,
+    Restart,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn rebuild_failure_action(has_window: bool) -> RebuildFailureAction {
+    if has_window {
+        RebuildFailureAction::Prompt
+    } else {
+        RebuildFailureAction::Restart
+    }
+}
+
 impl RecoveryState {
     pub fn new() -> Self {
         let now = timestamp_ms();
@@ -507,7 +523,6 @@ pub fn recovery_dismiss_notice(window: WebviewWindow, state: State<'_, RecoveryS
 
 /// Close native preview children owned by `window_label`. They otherwise float
 /// above a reloading main renderer and can make recovery appear to have failed.
-#[cfg(target_os = "macos")]
 pub fn close_owned_previews(app: &AppHandle, window_label: &str) {
     let prefix = format!("preview-{window_label}-");
     for (label, webview) in app.webviews() {
@@ -515,6 +530,22 @@ pub fn close_owned_previews(app: &AppHandle, window_label: &str) {
             let _ = webview.close();
         }
     }
+}
+
+fn reload_after_preview_cleanup<E>(
+    close_previews: impl FnOnce(),
+    reload: impl FnOnce() -> Result<(), E>,
+) -> Result<(), E> {
+    close_previews();
+    reload()
+}
+
+pub fn reload_workspace(window: &WebviewWindow) -> Result<(), String> {
+    let app = window.app_handle();
+    reload_after_preview_cleanup(
+        || close_owned_previews(app, window.label()),
+        || window.reload().map_err(|error| error.to_string()),
+    )
 }
 
 /// Ask before attempting another rebuild once automatic recovery has
@@ -735,12 +766,24 @@ pub fn schedule_rebuild(
             );
         }
         if result.is_err() {
-            if let Some(window) = app.get_window(&window_label) {
-                if prompt_rebuild_failure(&window) {
-                    let _ = schedule_rebuild(app.clone(), window_label.clone(), reason, false);
-                } else {
-                    app.request_restart();
+            let window = app.get_window(&window_label);
+            match rebuild_failure_action(window.is_some()) {
+                RebuildFailureAction::Prompt => {
+                    let window = window.expect("rebuild failure window disappeared");
+                    // The failed rebuild may have hidden the original window
+                    // before returning. Make its recovery prompt visible.
+                    let _ = window.show();
+                    if prompt_rebuild_failure(&window) {
+                        let _ = schedule_rebuild(app.clone(), window_label.clone(), reason, false);
+                    } else {
+                        app.request_restart();
+                    }
                 }
+                // Once destroy() succeeded there is no native parent left for
+                // a reliable error dialog, and another in-process rebuild
+                // cannot inspect the old window configuration. Restart rather
+                // than leaving a headless Rust process and stranded sessions.
+                RebuildFailureAction::Restart => app.request_restart(),
             }
         }
     });
@@ -754,10 +797,10 @@ pub fn schedule_rebuild(
     _reason: &'static str,
     _automatic: bool,
 ) -> Result<(), String> {
-    app.get_webview_window(&window_label)
-        .ok_or_else(|| format!("webview window {window_label} not found"))?
-        .reload()
-        .map_err(|error| error.to_string())
+    let window = app
+        .get_webview_window(&window_label)
+        .ok_or_else(|| format!("webview window {window_label} not found"))?;
+    reload_workspace(&window)
 }
 
 #[cfg(target_os = "macos")]
@@ -859,6 +902,7 @@ pub fn recovery_reveal_log(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     #[test]
     fn snapshot_limits_are_enforced() {
@@ -1023,5 +1067,29 @@ mod tests {
         assert!(state.is_rebuilding());
         state.finish_rebuild("main", true, 2_000);
         assert!(!state.is_rebuilding());
+    }
+
+    #[test]
+    fn manual_reload_closes_previews_before_reloading_renderer() {
+        let steps = RefCell::new(Vec::new());
+        reload_after_preview_cleanup::<()>(
+            || steps.borrow_mut().push("close-previews"),
+            || {
+                steps.borrow_mut().push("reload-renderer");
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            steps.into_inner(),
+            vec!["close-previews", "reload-renderer"]
+        );
+    }
+
+    #[test]
+    fn post_destroy_rebuild_failure_restarts_instead_of_staying_headless() {
+        assert_eq!(rebuild_failure_action(false), RebuildFailureAction::Restart);
+        assert_eq!(rebuild_failure_action(true), RebuildFailureAction::Prompt);
     }
 }
